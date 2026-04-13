@@ -1,0 +1,12 @@
+services:
+  cobip-ai:
+    build: .
+    container_name: cobip-ai
+    ports:
+      - "8080:8000"
+    env_file:
+      - .env
+    # host 네트워크의 Qdrant(6333), vLLM 등에 접근하기 위해 extra_hosts 사용
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
