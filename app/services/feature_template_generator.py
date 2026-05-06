@@ -1,7 +1,11 @@
 """기능템플릿 생성 service.
 
-이 단계에서는 실제 LLM(vLLM/Qwen) 호출 없이 mock 데이터를 반환한다.
-Qdrant·Redis·실제 LLM 연동은 추후 단계에서 추가한다.
+이 단계에서는 LLMService 호출 "구조"를 연결한다.
+- VLLM_BASE_URL 이 설정되어 있으면 LLMService 가 실제 vLLM 으로 POST 한다.
+- 설정되어 있지 않으면 LLMService 자체가 mock dict 를 돌려주므로,
+  Pydantic 검증에 실패하면서 자연스럽게 mock fallback 으로 떨어진다.
+- vLLM 호출은 반드시 LLMService 를 통해서만 한다.
+- Qdrant·Redis 연동은 추후 단계에서 추가한다.
 
 이전 단계에서 forward reference 미해소 때문에 사용하던
 FeatureTemplateData.model_construct(...) 우회는 제거되었다.
@@ -9,6 +13,8 @@ FeatureTemplateData.model_construct(...) 우회는 제거되었다.
 InterviewQuestionSchema, NextRecommendationSchema)의 정식 인스턴스로 만들고
 일반 생성자 FeatureTemplateData(...) 로 검증을 통과한다.
 """
+
+from pydantic import ValidationError
 
 from app.models.enums import DifficultyLevel, QuestionType
 from app.schemas.feature_template import (
@@ -25,6 +31,7 @@ from app.schemas.feature_template import (
     QuestionSchema,
     RequirementSchema,
 )
+from app.services.llm_service import LLMService
 from app.services.prompt_builder import build_feature_template_prompt
 
 __all__ = ["FeatureTemplateGenerator"]
@@ -53,17 +60,41 @@ def _extension_for(language: str) -> str:
 
 
 class FeatureTemplateGenerator:
-    """기능템플릿 생성기 (mock 단계).
+    """기능템플릿 생성기.
 
-    실제 LLM 호출 대신 request 값을 기반으로 9개 섹션을 채운 mock
-    FeatureTemplateData 를 정식 Pydantic 검증을 거쳐 반환한다.
+    1) build_feature_template_prompt(request) 로 프롬프트를 조립.
+    2) LLMService().generate_json(prompt) 로 dict 응답을 받음.
+    3) FeatureTemplateData(**llm_result) 로 정식 Pydantic 검증.
+    4) 어떤 단계에서든 실패하면(VLLM 미설정, 네트워크/타임아웃,
+       JSON 파싱 실패, 스키마 검증 실패) mock fallback 으로 떨어진다.
+
     featureName 이 "로그인" 이면 로그인 도메인에 맞춘 상세 mock 을 반환한다.
+    그 외에는 일반 fallback mock 을 반환한다.
     """
 
-    def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateData:
-        # 프롬프트 조립까지만 수행하고 실제 LLM 호출은 하지 않는다.
-        _prompt = build_feature_template_prompt(request)
+    def __init__(self, llm_service: LLMService | None = None) -> None:
+        self._llm_service = llm_service or LLMService()
 
+    def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateData:
+        prompt = build_feature_template_prompt(request)
+
+        try:
+            llm_result = self._llm_service.generate_json(prompt)
+            return FeatureTemplateData(**llm_result)
+        except (RuntimeError, ValidationError, TypeError, ValueError):
+            # LLM 호출 실패 / JSON 파싱 실패 / 스키마 검증 실패
+            # → mock fallback 으로 안전하게 떨어진다.
+            # (VLLM_BASE_URL 미설정 시 LLMService 가 schema 와 맞지 않는
+            #  mock dict 를 반환하므로 ValidationError 로 진입한다.)
+            return self._generate_mock_template(request)
+
+    # ------------------------------------------------------------------
+    # mock fallback dispatcher
+    # ------------------------------------------------------------------
+    def _generate_mock_template(
+        self,
+        request: FeatureTemplateGenerateRequest,
+    ) -> FeatureTemplateData:
         if request.featureName.strip() == "로그인":
             return self._build_login_template(request)
         return self._build_generic_template(request)
