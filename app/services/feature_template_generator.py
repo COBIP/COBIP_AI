@@ -1,0 +1,746 @@
+"""기능템플릿 생성 service.
+
+이 단계에서는 실제 LLM(vLLM/Qwen) 호출 없이 mock 데이터를 반환한다.
+Qdrant·Redis·실제 LLM 연동은 추후 단계에서 추가한다.
+
+이전 단계에서 forward reference 미해소 때문에 사용하던
+FeatureTemplateData.model_construct(...) 우회는 제거되었다.
+모든 mock 데이터는 신규 Pydantic 스키마(QuestionSchema, MissionSchema,
+InterviewQuestionSchema, NextRecommendationSchema)의 정식 인스턴스로 만들고
+일반 생성자 FeatureTemplateData(...) 로 검증을 통과한다.
+"""
+
+from app.models.enums import DifficultyLevel, QuestionType
+from app.schemas.feature_template import (
+    ApiSpecSchema,
+    CodeFileSchema,
+    FeatureTemplateData,
+    FeatureTemplateGenerateRequest,
+    FlowSchema,
+    InterviewQuestionSchema,
+    LayerRoleSchema,
+    MissionSchema,
+    NextRecommendationSchema,
+    OverviewSchema,
+    QuestionSchema,
+    RequirementSchema,
+)
+from app.services.prompt_builder import build_feature_template_prompt
+
+__all__ = ["FeatureTemplateGenerator"]
+
+
+_LANGUAGE_EXTENSION: dict[str, str] = {
+    "python": "py",
+    "java": "java",
+    "javascript": "js",
+    "typescript": "ts",
+    "kotlin": "kt",
+    "go": "go",
+}
+
+
+def _level_label(level: DifficultyLevel) -> str:
+    return {
+        DifficultyLevel.BEGINNER: "초급자",
+        DifficultyLevel.INTERMEDIATE: "중급자",
+        DifficultyLevel.ADVANCED: "고급자",
+    }[level]
+
+
+def _extension_for(language: str) -> str:
+    return _LANGUAGE_EXTENSION.get(language.lower(), "txt")
+
+
+class FeatureTemplateGenerator:
+    """기능템플릿 생성기 (mock 단계).
+
+    실제 LLM 호출 대신 request 값을 기반으로 9개 섹션을 채운 mock
+    FeatureTemplateData 를 정식 Pydantic 검증을 거쳐 반환한다.
+    featureName 이 "로그인" 이면 로그인 도메인에 맞춘 상세 mock 을 반환한다.
+    """
+
+    def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateData:
+        # 프롬프트 조립까지만 수행하고 실제 LLM 호출은 하지 않는다.
+        _prompt = build_feature_template_prompt(request)
+
+        if request.featureName.strip() == "로그인":
+            return self._build_login_template(request)
+        return self._build_generic_template(request)
+
+    # ------------------------------------------------------------------
+    # 로그인 전용 mock
+    # ------------------------------------------------------------------
+    def _build_login_template(
+        self,
+        request: FeatureTemplateGenerateRequest,
+    ) -> FeatureTemplateData:
+        framework_label = request.framework or "(미지정)"
+
+        overview = OverviewSchema(
+            featureName="로그인",
+            purpose=(
+                "사용자가 등록된 계정 정보(아이디/이메일 + 비밀번호)로 시스템에 "
+                "안전하게 인증하여 접근할 수 있도록 한다."
+            ),
+            useCases=[
+                "회원 전용 페이지 접근",
+                "장바구니/주문 내역 등 개인 데이터 조회",
+                "토큰 기반 API 호출 인증",
+                "관리자 페이지 진입 인증",
+            ],
+            resultDescription=(
+                "로그인 성공 시 사용자 식별 정보와 함께 인증 토큰(JWT 또는 세션 ID)을 "
+                "응답으로 발급한다. 실패 시 사유에 맞는 에러 코드/메시지를 반환한다."
+            ),
+            techStack=[
+                request.language,
+                framework_label,
+                "React",
+                "PostgreSQL",
+                "BCrypt",
+                "JWT",
+            ],
+            learningGoals=[
+                "로그인 처리의 전체 계층 흐름 이해 (Controller → Service → Repository → DB)",
+                "비밀번호 해싱 및 검증 로직 학습 (BCrypt)",
+                "요청 DTO / 응답 DTO 분리 패턴 학습",
+                "성공/실패 응답 일관성 있게 설계하기",
+                "로그인 상태 유지 방식 비교 (세션 vs JWT)",
+            ],
+        )
+
+        requirements = [
+            RequirementSchema(
+                requirementId="R-001",
+                name="로그인 정보 입력",
+                description="사용자는 아이디(또는 이메일)와 비밀번호를 입력해 로그인 요청을 보낸다.",
+                inputValue="username(string), password(string)",
+                processCondition="두 필드 모두 비어 있지 않아야 한다.",
+                successResult="요청이 서버로 정상 전달된다.",
+                failureResult="필수값 누락 시 400 응답.",
+                priority="HIGH",
+                relatedScreenOrApi="LoginPage / POST /api/auth/login",
+            ),
+            RequirementSchema(
+                requirementId="R-002",
+                name="입력값 검증",
+                description="username/password 의 형식과 길이를 검증한다.",
+                inputValue="username, password",
+                processCondition="username 4자 이상, password 8자 이상.",
+                successResult="검증 통과 시 사용자 조회 단계로 진행.",
+                failureResult="검증 실패 시 400 응답 + 사유 메시지.",
+                priority="HIGH",
+                relatedScreenOrApi="POST /api/auth/login",
+            ),
+            RequirementSchema(
+                requirementId="R-003",
+                name="사용자 조회",
+                description="입력된 username 으로 DB에서 사용자 레코드를 조회한다.",
+                inputValue="username",
+                processCondition="UserRepository.findByUsername 호출.",
+                successResult="사용자 엔티티 반환.",
+                failureResult="존재하지 않으면 401 응답 (계정 없음 노출 회피용 통일 메시지).",
+                priority="HIGH",
+                relatedScreenOrApi="UserRepository.findByUsername",
+            ),
+            RequirementSchema(
+                requirementId="R-004",
+                name="비밀번호 검증",
+                description="입력 비밀번호와 저장된 해시 비밀번호를 BCrypt 로 비교한다.",
+                inputValue="password(평문), user.passwordHash",
+                processCondition="BCrypt.matches(plain, hash).",
+                successResult="일치 시 인증 성공 처리로 진행.",
+                failureResult="불일치 시 401 응답.",
+                priority="HIGH",
+                relatedScreenOrApi="LoginService.login",
+            ),
+            RequirementSchema(
+                requirementId="R-005",
+                name="로그인 성공 처리",
+                description="JWT(또는 세션) 발급 후 사용자 기본 정보와 함께 응답한다.",
+                inputValue="user",
+                processCondition="JwtProvider.create(user) 호출.",
+                successResult="200 OK + accessToken + 사용자 요약 정보.",
+                failureResult="-",
+                priority="HIGH",
+                relatedScreenOrApi="POST /api/auth/login",
+            ),
+            RequirementSchema(
+                requirementId="R-006",
+                name="로그인 실패 처리",
+                description="실패 사유별로 일관된 에러 응답 포맷을 반환한다.",
+                inputValue="실패 사유",
+                processCondition="errorCode + message 표준화.",
+                successResult="-",
+                failureResult="401(인증 실패) / 400(입력값 오류) / 500(서버 오류).",
+                priority="HIGH",
+                relatedScreenOrApi="POST /api/auth/login",
+            ),
+            RequirementSchema(
+                requirementId="R-007",
+                name="비밀번호 보안",
+                description="비밀번호는 평문 저장 금지, BCrypt 해시로 저장 및 비교한다.",
+                inputValue="password(평문)",
+                processCondition="회원가입 시 해시 저장, 로그인 시 해시 비교만.",
+                successResult="응답·로그에 비밀번호 노출 없음.",
+                failureResult="평문 저장/노출 시 보안 위반.",
+                priority="CRITICAL",
+                relatedScreenOrApi="UserService / 로그 정책",
+            ),
+        ]
+
+        flow = FlowSchema(
+            steps=[
+                "1. React LoginPage 에서 username/password 입력",
+                "2. 클라이언트가 POST /api/auth/login 으로 API 요청",
+                "3. LoginController 가 요청을 수신하고 DTO 로 변환",
+                "4. LoginService 가 입력값 검증 및 인증 로직 수행",
+                "5. UserRepository 를 통해 DB 에서 사용자 조회",
+                "6. DB 응답 기반 비밀번호 검증 후 JWT 발급",
+                "7. Controller 가 통일된 응답 포맷으로 클라이언트에 반환",
+            ],
+            layers=[
+                LayerRoleSchema(layer="React", role="로그인 화면 입력 및 API 호출"),
+                LayerRoleSchema(layer="API 요청", role="HTTP POST 로 인증 정보 전달"),
+                LayerRoleSchema(layer="Controller", role="요청 수신, DTO 변환, 응답 반환"),
+                LayerRoleSchema(layer="Service", role="검증·인증 로직, 토큰 발급"),
+                LayerRoleSchema(layer="Repository", role="사용자 데이터 조회"),
+                LayerRoleSchema(layer="DB", role="사용자 정보 영속 저장소"),
+                LayerRoleSchema(layer="응답 반환", role="성공/실패에 맞는 통일 응답 포맷"),
+            ],
+        )
+
+        api_spec = [
+            ApiSpecSchema(
+                apiName="로그인",
+                method="POST",
+                endpoint="/api/auth/login",
+                description="아이디/비밀번호로 로그인하고 인증 토큰을 발급한다.",
+                requestBody={
+                    "username": "string",
+                    "password": "string",
+                },
+                responseBody={
+                    "success": True,
+                    "message": "로그인 성공",
+                    "data": {
+                        "accessToken": "string(JWT)",
+                        "tokenType": "Bearer",
+                        "user": {
+                            "userId": "long",
+                            "username": "string",
+                            "nickname": "string",
+                        },
+                    },
+                },
+                status=200,
+            ),
+        ]
+
+        code_files: list[CodeFileSchema] = []
+        if request.includeCode:
+            code_files = [
+                CodeFileSchema(
+                    fileName="LoginController.java",
+                    filePath="src/main/java/com/example/auth/LoginController.java",
+                    role="Controller",
+                    language="java",
+                    content=(
+                        "@RestController\n"
+                        "@RequestMapping(\"/api/auth\")\n"
+                        "@RequiredArgsConstructor\n"
+                        "public class LoginController {\n"
+                        "    private final LoginService loginService;\n\n"
+                        "    @PostMapping(\"/login\")\n"
+                        "    public ResponseEntity<ApiResponse<LoginResponse>> login(\n"
+                        "            @RequestBody @Valid LoginRequest request) {\n"
+                        "        LoginResponse response = loginService.login(request);\n"
+                        "        return ResponseEntity.ok(ApiResponse.success(\"로그인 성공\", response));\n"
+                        "    }\n"
+                        "}\n"
+                    ),
+                ),
+                CodeFileSchema(
+                    fileName="LoginRequest.java",
+                    filePath="src/main/java/com/example/auth/dto/LoginRequest.java",
+                    role="Request DTO",
+                    language="java",
+                    content=(
+                        "public record LoginRequest(\n"
+                        "        @NotBlank @Size(min = 4) String username,\n"
+                        "        @NotBlank @Size(min = 8) String password\n"
+                        ") {}\n"
+                    ),
+                ),
+                CodeFileSchema(
+                    fileName="LoginResponse.java",
+                    filePath="src/main/java/com/example/auth/dto/LoginResponse.java",
+                    role="Response DTO",
+                    language="java",
+                    content=(
+                        "public record LoginResponse(\n"
+                        "        String accessToken,\n"
+                        "        String tokenType,\n"
+                        "        UserSummary user\n"
+                        ") {\n"
+                        "    public record UserSummary(Long userId, String username, String nickname) {}\n"
+                        "}\n"
+                    ),
+                ),
+                CodeFileSchema(
+                    fileName="LoginService.java",
+                    filePath="src/main/java/com/example/auth/LoginService.java",
+                    role="Service",
+                    language="java",
+                    content=(
+                        "@Service\n"
+                        "@RequiredArgsConstructor\n"
+                        "public class LoginService {\n"
+                        "    private final UserRepository userRepository;\n"
+                        "    private final PasswordEncoder passwordEncoder;\n"
+                        "    private final JwtProvider jwtProvider;\n\n"
+                        "    public LoginResponse login(LoginRequest request) {\n"
+                        "        User user = userRepository.findByUsername(request.username())\n"
+                        "                .orElseThrow(() -> new AuthException(\"INVALID_CREDENTIALS\"));\n"
+                        "        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {\n"
+                        "            throw new AuthException(\"INVALID_CREDENTIALS\");\n"
+                        "        }\n"
+                        "        String token = jwtProvider.create(user);\n"
+                        "        return new LoginResponse(token, \"Bearer\",\n"
+                        "                new LoginResponse.UserSummary(\n"
+                        "                        user.getId(), user.getUsername(), user.getNickname()));\n"
+                        "    }\n"
+                        "}\n"
+                    ),
+                ),
+                CodeFileSchema(
+                    fileName="UserRepository.java",
+                    filePath="src/main/java/com/example/user/UserRepository.java",
+                    role="Repository",
+                    language="java",
+                    content=(
+                        "public interface UserRepository extends JpaRepository<User, Long> {\n"
+                        "    Optional<User> findByUsername(String username);\n"
+                        "}\n"
+                    ),
+                ),
+                CodeFileSchema(
+                    fileName="User.java",
+                    filePath="src/main/java/com/example/user/User.java",
+                    role="Entity",
+                    language="java",
+                    content=(
+                        "@Entity\n"
+                        "@Table(name = \"users\")\n"
+                        "@Getter\n"
+                        "@NoArgsConstructor(access = AccessLevel.PROTECTED)\n"
+                        "public class User {\n"
+                        "    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)\n"
+                        "    private Long id;\n\n"
+                        "    @Column(nullable = false, unique = true)\n"
+                        "    private String username;\n\n"
+                        "    @Column(nullable = false)\n"
+                        "    private String passwordHash;\n\n"
+                        "    private String nickname;\n"
+                        "}\n"
+                    ),
+                ),
+                CodeFileSchema(
+                    fileName="LoginPage.jsx",
+                    filePath="src/pages/auth/LoginPage.jsx",
+                    role="Frontend Page",
+                    language="javascript",
+                    content=(
+                        "import { useState } from \"react\";\n"
+                        "import axios from \"axios\";\n\n"
+                        "export default function LoginPage() {\n"
+                        "  const [username, setUsername] = useState(\"\");\n"
+                        "  const [password, setPassword] = useState(\"\");\n"
+                        "  const [error, setError] = useState(\"\");\n\n"
+                        "  const onSubmit = async (e) => {\n"
+                        "    e.preventDefault();\n"
+                        "    try {\n"
+                        "      const { data } = await axios.post(\"/api/auth/login\",\n"
+                        "        { username, password });\n"
+                        "      localStorage.setItem(\"accessToken\", data.data.accessToken);\n"
+                        "    } catch (err) {\n"
+                        "      setError(err.response?.data?.message ?? \"로그인 실패\");\n"
+                        "    }\n"
+                        "  };\n\n"
+                        "  return (\n"
+                        "    <form onSubmit={onSubmit}>\n"
+                        "      <input value={username} onChange={(e) => setUsername(e.target.value)} />\n"
+                        "      <input type=\"password\" value={password}\n"
+                        "        onChange={(e) => setPassword(e.target.value)} />\n"
+                        "      <button type=\"submit\">로그인</button>\n"
+                        "      {error && <p>{error}</p>}\n"
+                        "    </form>\n"
+                        "  );\n"
+                        "}\n"
+                    ),
+                ),
+            ]
+
+        basic_questions = [
+            QuestionSchema(
+                questionId="Q-001",
+                type=QuestionType.SHORT_ANSWER,
+                question=(
+                    "로그인 처리에서 Controller / Service / Repository 각 계층의 역할을 "
+                    "한 줄씩 설명하시오."
+                ),
+                choices=None,
+                answer=(
+                    "Controller: 요청 수신·응답 반환, "
+                    "Service: 인증 로직·토큰 발급, "
+                    "Repository: 사용자 조회."
+                ),
+                explanation=(
+                    "각 계층은 책임이 분리되어 있다. Controller 는 HTTP 프로토콜만 다루고, "
+                    "Service 가 비즈니스 규칙(검증·인증·토큰 발급)을, Repository 가 영속성 "
+                    "(사용자 조회)을 담당한다."
+                ),
+                relatedSection="flow",
+                difficulty=DifficultyLevel.BEGINNER,
+            ),
+            QuestionSchema(
+                questionId="Q-002",
+                type=QuestionType.OUTPUT_PREDICTION,
+                question=(
+                    "사용자가 로그인 버튼을 눌렀을 때, 7단계 흐름(React 입력 → API 요청 → "
+                    "Controller → Service → Repository → DB → 응답 반환) 중 비밀번호가 "
+                    "틀렸다면 어느 단계에서 실패가 발생하는가?"
+                ),
+                choices=None,
+                answer="Service 단계 (passwordEncoder.matches 비교 시점).",
+                explanation=(
+                    "Repository 까지는 사용자 조회가 정상 수행되며, Service 의 비밀번호 "
+                    "해시 비교 단계(passwordEncoder.matches)에서 불일치로 인증 예외가 발생한다."
+                ),
+                relatedSection="flow",
+                difficulty=DifficultyLevel.INTERMEDIATE,
+            ),
+            QuestionSchema(
+                questionId="Q-003",
+                type=QuestionType.FILL_BLANK,
+                question=(
+                    "if (!passwordEncoder.____(request.password(), user.getPasswordHash())) "
+                    "{ throw new AuthException(...); }"
+                ),
+                choices=None,
+                answer="matches",
+                explanation=(
+                    "BCrypt 기반 PasswordEncoder 의 matches(plain, hash) 메서드는 평문과 "
+                    "해시를 안전하게 비교한다. 평문 비교(==, .equals)는 절대 사용하지 않는다."
+                ),
+                relatedSection="codeFiles",
+                difficulty=DifficultyLevel.INTERMEDIATE,
+            ),
+        ]
+
+        missions = [
+            MissionSchema(
+                missionId="M-001",
+                title="로그인 실패 횟수 제한",
+                description="동일 계정으로 5회 연속 실패 시 일정 시간 잠그는 로직을 추가하라.",
+                missionType="security",
+                requirements=[
+                    "사용자별 실패 카운터 누적",
+                    "임계치 도달 시 일정 시간 차단",
+                    "성공 시 카운터 초기화",
+                ],
+                successCriteria=[
+                    "실패 카운트가 사용자별로 누적된다.",
+                    "5회 도달 시 일정 시간 로그인이 차단된다.",
+                    "성공 시 카운트가 초기화된다.",
+                ],
+                relatedRequirements=["R-006", "R-007"],
+                difficulty=DifficultyLevel.INTERMEDIATE,
+            ),
+            MissionSchema(
+                missionId="M-002",
+                title="JWT 적용",
+                description="세션 대신 JWT 발급/검증으로 전환하고, 만료/리프레시 정책을 명시하라.",
+                missionType="enhancement",
+                requirements=[
+                    "accessToken 발급",
+                    "리프레시 토큰 갱신 흐름",
+                    "보호 API 에서 토큰 검증",
+                ],
+                successCriteria=[
+                    "accessToken 발급 및 만료 처리.",
+                    "리프레시 토큰 갱신 흐름 구현.",
+                    "보호 API 에서 토큰 검증 동작.",
+                ],
+                relatedRequirements=["R-005"],
+                difficulty=DifficultyLevel.ADVANCED,
+            ),
+            MissionSchema(
+                missionId="M-003",
+                title="입력값 유효성 검사",
+                description=(
+                    "username/password 형식·길이를 Bean Validation 으로 검증하고 "
+                    "400 응답을 표준화하라."
+                ),
+                missionType="validation",
+                requirements=[
+                    "@Valid + @NotBlank/@Size 적용",
+                    "실패 시 errorCode·message 일관 응답",
+                ],
+                successCriteria=[
+                    "@Valid + @NotBlank/@Size 적용.",
+                    "검증 실패 시 errorCode·message 일관 응답.",
+                ],
+                relatedRequirements=["R-002", "R-006"],
+                difficulty=DifficultyLevel.BEGINNER,
+            ),
+            MissionSchema(
+                missionId="M-004",
+                title="로그아웃 기능 추가",
+                description="발급된 토큰을 무효화하는 로그아웃 API 를 구현하라.",
+                missionType="extension",
+                requirements=[
+                    "POST /api/auth/logout 추가",
+                    "토큰 무효화 (블랙리스트 또는 리프레시 폐기)",
+                ],
+                successCriteria=[
+                    "POST /api/auth/logout 추가.",
+                    "토큰 무효화(블랙리스트 또는 리프레시 폐기) 동작.",
+                ],
+                relatedRequirements=["R-005"],
+                difficulty=DifficultyLevel.BEGINNER,
+            ),
+        ]
+
+        interview_questions = [
+            InterviewQuestionSchema(
+                questionId="IQ-001",
+                question=(
+                    "로그인 요청이 들어왔을 때 서버 내부에서 발생하는 단계를 "
+                    "순서대로 설명하시오."
+                ),
+                keyPoints=[
+                    "Controller 가 요청 수신",
+                    "DTO 검증",
+                    "사용자 조회",
+                    "비밀번호 해시 비교",
+                    "JWT 발급",
+                    "통일 응답 포맷 반환",
+                ],
+                sampleAnswer=(
+                    "Controller 에서 요청 수신 → DTO 검증 → Service 에서 사용자 조회 → "
+                    "비밀번호 해시 비교 → 성공 시 JWT 발급 → 통일된 응답 포맷으로 반환."
+                ),
+                relatedSection="flow",
+            ),
+            InterviewQuestionSchema(
+                questionId="IQ-002",
+                question="각 계층(Controller / Service / Repository) 을 분리하는 이유와 책임을 설명하시오.",
+                keyPoints=[
+                    "관심사 분리",
+                    "Controller=프로토콜",
+                    "Service=비즈니스 규칙",
+                    "Repository=영속성",
+                    "테스트·재사용·교체 용이성",
+                ],
+                sampleAnswer=(
+                    "관심사 분리 원칙에 따라 Controller 는 HTTP 프로토콜, "
+                    "Service 는 비즈니스 규칙, Repository 는 영속성을 담당한다. "
+                    "이로써 단위 테스트, 재사용, 교체 용이성이 향상된다."
+                ),
+                relatedSection="flow",
+            ),
+            InterviewQuestionSchema(
+                questionId="IQ-003",
+                question="세션 기반 인증과 JWT 기반 인증의 차이와 트레이드오프를 설명하시오.",
+                keyPoints=[
+                    "세션은 서버 상태 보유",
+                    "세션은 무효화 쉬움",
+                    "세션은 수평 확장 시 공유 저장소 필요",
+                    "JWT 는 무상태",
+                    "JWT 는 확장 용이",
+                    "JWT 는 무효화·만료 정책 별도 설계 필요",
+                ],
+                sampleAnswer=(
+                    "세션은 서버에 상태를 두기 때문에 무효화가 쉽지만 수평 확장 시 "
+                    "공유 저장소가 필요하다. JWT 는 무상태로 확장에 유리하지만, "
+                    "토큰 무효화·만료·리프레시 정책을 별도로 설계해야 한다."
+                ),
+                relatedSection=None,
+            ),
+            InterviewQuestionSchema(
+                questionId="IQ-004",
+                question="비밀번호를 안전하게 저장하기 위한 원칙을 설명하시오.",
+                keyPoints=[
+                    "평문 저장 금지",
+                    "BCrypt/Argon2 같은 해시 + 솔트",
+                    "로그·응답 노출 금지",
+                    "전송 구간 HTTPS",
+                    "비밀번호 정책 강제",
+                ],
+                sampleAnswer=(
+                    "평문 저장 금지, BCrypt/Argon2 같은 단방향 해시 + 솔트 사용, "
+                    "로그·응답에 비밀번호 노출 금지, 전송 구간은 HTTPS, "
+                    "그리고 비밀번호 정책(길이/복잡도)을 강제한다."
+                ),
+                relatedSection="codeFiles",
+            ),
+        ]
+
+        next_recommendations = [
+            NextRecommendationSchema(
+                featureName="회원가입",
+                reason=(
+                    "로그인의 짝이 되는 사용자 생성 흐름. 비밀번호 해시 저장·중복 검증 등 "
+                    "새 패턴을 추가로 익힐 수 있다."
+                ),
+                expectedLearning=(
+                    "사용자 엔티티 생성, BCrypt 해시 저장, 중복 username/email 검증, "
+                    "검증 실패 시 통일 에러 응답."
+                ),
+                priority=1,
+            ),
+            NextRecommendationSchema(
+                featureName="이메일 인증",
+                reason="회원가입/로그인 보안을 강화하는 후속 기능.",
+                expectedLearning=(
+                    "이메일 발송 흐름, 일회용 토큰 생성·만료, 인증 상태 전환 처리."
+                ),
+                priority=2,
+            ),
+            NextRecommendationSchema(
+                featureName="JWT 인증",
+                reason="세션 기반에서 토큰 기반 인증으로 확장 학습.",
+                expectedLearning=(
+                    "accessToken/리프레시 토큰 발급·검증, 만료 정책, 무상태 인증 패턴."
+                ),
+                priority=3,
+            ),
+            NextRecommendationSchema(
+                featureName="권한 관리",
+                reason="로그인된 사용자의 역할(Role) 기반 접근 제어 학습.",
+                expectedLearning=(
+                    "Role/Permission 모델링, 인가 미들웨어, 보호 API 접근 정책 설계."
+                ),
+                priority=4,
+            ),
+        ]
+
+        return FeatureTemplateData(
+            overview=overview,
+            requirements=requirements,
+            flow=flow,
+            apiSpec=api_spec,
+            codeFiles=code_files,
+            basicQuestions=basic_questions,
+            missions=missions if request.includeMissions else [],
+            interviewQuestions=interview_questions if request.includeInterview else [],
+            nextRecommendations=next_recommendations,
+        )
+
+    # ------------------------------------------------------------------
+    # 일반 fallback mock (featureName != "로그인")
+    # ------------------------------------------------------------------
+    def _build_generic_template(
+        self,
+        request: FeatureTemplateGenerateRequest,
+    ) -> FeatureTemplateData:
+        feature_name = request.featureName
+        language = request.language
+        framework_label = request.framework or "(미지정)"
+        level_label = _level_label(request.level)
+        ext = _extension_for(language)
+
+        overview = OverviewSchema(
+            featureName=feature_name,
+            purpose=f"{level_label}용 {feature_name} 기능을 학습 목적으로 구현한다.",
+            useCases=[
+                f"{feature_name} 기본 사용 사례",
+                f"{feature_name} 확장 사용 사례",
+            ],
+            resultDescription=f"{feature_name} 동작 결과 (mock).",
+            techStack=[language, framework_label],
+            learningGoals=[
+                f"{feature_name}의 핵심 개념 이해",
+                f"{feature_name}의 기본 흐름 학습",
+            ],
+        )
+
+        requirements = [
+            RequirementSchema(
+                requirementId="R-001",
+                name=f"{feature_name} 기본 처리",
+                description=f"(mock) {feature_name} 기본 처리 요구사항",
+                inputValue="(mock) 입력 예시",
+                processCondition="(mock) 처리 조건",
+                successResult="(mock) 성공 결과",
+                failureResult="(mock) 실패 결과",
+                priority="HIGH",
+                relatedScreenOrApi=f"POST /api/{feature_name.lower()}",
+            ),
+        ]
+
+        flow = FlowSchema(
+            steps=[
+                "1. 클라이언트 요청 수신",
+                "2. 요청 검증",
+                "3. 비즈니스 로직 처리",
+                "4. 응답 반환",
+            ],
+            layers=[
+                LayerRoleSchema(layer="Controller", role="요청 수신 및 라우팅"),
+                LayerRoleSchema(layer="Service", role="비즈니스 로직 처리"),
+                LayerRoleSchema(layer="Repository", role="데이터 접근"),
+            ],
+        )
+
+        api_spec = [
+            ApiSpecSchema(
+                apiName=f"{feature_name} API",
+                method="POST",
+                endpoint=f"/api/{feature_name.lower()}",
+                description=f"(mock) {feature_name} 처리 엔드포인트",
+                requestBody={"field": "value"},
+                responseBody={"success": True, "data": {}},
+                status=200,
+            ),
+        ]
+
+        code_files: list[CodeFileSchema] = []
+        if request.includeCode:
+            code_files = [
+                CodeFileSchema(
+                    fileName=f"{feature_name}Controller.{ext}",
+                    filePath=None,
+                    role="Controller",
+                    language=language,
+                    content=f"// (mock) {feature_name} controller content",
+                ),
+                CodeFileSchema(
+                    fileName=f"{feature_name}Service.{ext}",
+                    filePath=None,
+                    role="Service",
+                    language=language,
+                    content=f"// (mock) {feature_name} service content",
+                ),
+            ]
+
+        # generic fallback 은 9개 섹션 모두 정식 인스턴스로 채우되,
+        # 4개 후속 섹션은 mock 으로 빈 리스트를 둔다 (스키마 검증은 통과).
+        basic_questions: list[QuestionSchema] = []
+        missions: list[MissionSchema] = []
+        interview_questions: list[InterviewQuestionSchema] = []
+        next_recommendations: list[NextRecommendationSchema] = []
+
+        return FeatureTemplateData(
+            overview=overview,
+            requirements=requirements,
+            flow=flow,
+            apiSpec=api_spec,
+            codeFiles=code_files,
+            basicQuestions=basic_questions,
+            missions=missions if request.includeMissions else [],
+            interviewQuestions=interview_questions if request.includeInterview else [],
+            nextRecommendations=next_recommendations,
+        )
