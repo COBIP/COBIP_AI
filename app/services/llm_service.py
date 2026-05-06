@@ -5,15 +5,26 @@
 - 설정되어 있지 않으면 임시 응답(mock)을 반환해, 다른 service 가 LLMService 를
   안전하게 의존할 수 있도록 한다.
 - 오류는 RuntimeError 로 통일해 던진다 (네트워크 오류·타임아웃·파싱 실패 등).
+
+vLLM 자체는 FastAPI 서버에 설치하지 않는다.
+GPU 서버 또는 별도 컨테이너에서 실행되는 vLLM 의 OpenAI-호환 HTTP API 만 호출한다.
 """
 
 import json
+import re
 
 import httpx
 
 from app.core.config import settings
 
 __all__ = ["LLMService"]
+
+
+# ```json ... ``` 또는 ``` ... ``` 코드블록에서 본문만 캡처
+_CODE_BLOCK_RE = re.compile(
+    r"```(?:json)?\s*(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 class LLMService:
@@ -37,11 +48,16 @@ class LLMService:
         """단일 prompt 로 텍스트 응답을 받는다.
 
         VLLM_BASE_URL 미설정 시 mock 텍스트를 반환한다.
+        설정 시에는 build_messages 로 OpenAI-호환 messages 를 만들어
+        call_vllm 을 호출하고 choices[0].message.content 를 반환한다.
         """
         if not settings.VLLM_BASE_URL:
             return self._mock_text(prompt)
 
-        messages = [{"role": "user", "content": prompt}]
+        messages = self.build_messages(
+            system_prompt="You are a helpful assistant.",
+            user_prompt=prompt,
+        )
         result = self.call_vllm(messages)
         return self._extract_content(result)
 
@@ -49,25 +65,31 @@ class LLMService:
         """단일 prompt 로 JSON 응답을 받아 dict 로 반환한다.
 
         VLLM_BASE_URL 미설정 시 mock dict 를 반환한다.
-        실제 LLM 응답이 JSON 으로 파싱되지 않으면 RuntimeError.
+        실제 LLM 응답에서 다음 순서로 JSON 추출을 시도한다.
+
+        1) 응답 문자열 전체를 json.loads 로 파싱.
+        2) ```json ... ``` 또는 ``` ... ``` 코드블록 안의 본문을 json.loads.
+        3) 첫 '{' 부터 마지막 '}' 까지 슬라이스해 json.loads.
+        4) 모두 실패하면 RuntimeError.
         """
         if not settings.VLLM_BASE_URL:
             return self._mock_json(prompt)
 
         text = self.generate_text(prompt)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as exc:
+        parsed = self._parse_json_loose(text)
+        if parsed is None:
             raise RuntimeError(
                 "LLM 응답을 JSON 으로 파싱할 수 없습니다. "
                 f"앞 200자: {text[:200]!r}"
-            ) from exc
+            )
+        return parsed
 
     def call_vllm(self, messages: list[dict]) -> dict:
         """vLLM /chat/completions 엔드포인트를 호출한다.
 
         VLLM_BASE_URL 미설정 시 mock OpenAI-호환 응답을 반환한다.
         네트워크 오류·HTTP 오류·타임아웃은 RuntimeError 로 감싸 던진다.
+        VLLM_BASE_URL 끝의 '/' 유무와 무관하게 중복 슬래시 없이 호출한다.
         """
         if not settings.VLLM_BASE_URL:
             return self._mock_response(messages)
@@ -91,7 +113,8 @@ class LLMService:
             ) from exc
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
-                f"LLM 호출 실패: HTTP {exc.response.status_code} {exc.response.reason_phrase}"
+                "LLM 호출 실패: "
+                f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
             ) from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(f"LLM 호출 네트워크 오류: {exc}") from exc
@@ -101,12 +124,58 @@ class LLMService:
     # ------------------------------------------------------------------
     @staticmethod
     def _extract_content(result: dict) -> str:
+        """OpenAI-호환 응답에서 choices[0].message.content 를 안전하게 꺼낸다."""
         try:
-            return result["choices"][0]["message"]["content"]
+            choices = result["choices"]
+            if not choices:
+                raise KeyError("choices is empty")
+            message = choices[0]["message"]
+            content = message["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(
                 f"LLM 응답 형식이 OpenAI-호환 스키마가 아닙니다: {result!r}"
             ) from exc
+
+        if not isinstance(content, str):
+            raise RuntimeError(
+                f"LLM 응답 content 가 문자열이 아닙니다: {type(content).__name__}"
+            )
+        return content
+
+    @staticmethod
+    def _parse_json_loose(text: str) -> dict | None:
+        """LLM 출력에서 JSON 본문을 느슨하게 추출해 dict 로 파싱한다.
+
+        파싱 결과가 dict 가 아니면 (예: list, str) None 을 반환한다.
+        """
+        if not text:
+            return None
+
+        candidates: list[str] = []
+
+        stripped = text.strip()
+        if stripped:
+            candidates.append(stripped)
+
+        for match in _CODE_BLOCK_RE.findall(text):
+            block = match.strip()
+            if block:
+                candidates.append(block)
+
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            candidates.append(text[first_brace : last_brace + 1])
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+
+        return None
 
     # ------------------------------------------------------------------
     # internal: mock fallbacks (VLLM_BASE_URL 미설정 시)
