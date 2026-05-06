@@ -2,39 +2,21 @@
 
 이 단계에서는 실제 LLM(vLLM/Qwen) 없이 키워드 포함 여부 기반 rule 로 구현한다.
 실제 LLM 연동은 추후 단계에서 추가한다.
+
+InterviewFeedbackRequest / InterviewFeedbackResponse 는 schemas/evaluation.py 로
+이동했고, 여기서는 라우터 호환을 위해 동일 이름으로 re-export 한다.
 """
 
-from pydantic import BaseModel
+from app.schemas.evaluation import (
+    InterviewFeedbackRequest,
+    InterviewFeedbackResponse,
+)
 
 __all__ = [
     "InterviewFeedbackService",
     "InterviewFeedbackRequest",
     "InterviewFeedbackResponse",
 ]
-
-
-# ---------------------------------------------------------------------------
-# InterviewFeedbackRequest / InterviewFeedbackResponse
-#
-# NOTE: 두 모델은 임시로 service 파일에 정의한다.
-#       schemas/evaluation.py 또는 schemas/interview.py 로 이동시킬지 여부는
-#       이후 정리 단계에서 결정.
-# ---------------------------------------------------------------------------
-class InterviewFeedbackRequest(BaseModel):
-    featureName: str
-    topic: str | None = None
-    question: str
-    keyPoints: list[str]
-    userAnswer: str
-    modelAnswer: str | None = None
-
-
-class InterviewFeedbackResponse(BaseModel):
-    score: int
-    feedback: str
-    includedKeyPoints: list[str]
-    missingKeyPoints: list[str]
-    improvedAnswer: str
 
 
 class InterviewFeedbackService:
@@ -79,24 +61,22 @@ class InterviewFeedbackService:
                 "각 포인트를 한 문장씩 짚어보는 연습을 권장합니다."
             )
 
-        improved_parts: list[str] = []
-        if request.modelAnswer:
-            improved_parts.append(request.modelAnswer.strip())
         if missing:
-            improved_parts.append("[보강 포인트] " + ", ".join(missing))
-        improved_answer = "\n".join(improved_parts).strip()
-        if not improved_answer:
+            improved_answer = "[보강 포인트] " + ", ".join(missing)
+        elif request.keyPoints:
             improved_answer = (
-                f"{request.featureName} 관련 답변에는 다음 키 포인트가 포함되어야 합니다: "
+                "면접 답변에는 다음 키 포인트가 반드시 포함되어야 합니다: "
                 + ", ".join(request.keyPoints)
-                if request.keyPoints
-                else f"{request.featureName} 관련 답변의 핵심 키 포인트를 정리해 주세요."
+            )
+        else:
+            improved_answer = (
+                "면접 질문의 핵심 키 포인트를 정리한 뒤 답변을 다시 구성해 보세요."
             )
 
         return InterviewFeedbackResponse(
             score=score,
-            feedback=feedback,
             includedKeyPoints=included,
             missingKeyPoints=missing,
+            feedback=feedback,
             improvedAnswer=improved_answer,
         )

@@ -14,6 +14,10 @@ __all__ = [
     "QuizGradeResponse",
     "MissionFeedbackRequest",
     "MissionFeedbackResponse",
+    "CodeAnalyzeRequest",
+    "CodeAnalyzeResponse",
+    "InterviewFeedbackRequest",
+    "InterviewFeedbackResponse",
 ]
 
 
@@ -69,3 +73,30 @@ class MissionFeedbackResponse(BaseModel):
     codeIssues: list[CodeIssueSchema]
     improvementSuggestions: list[str]
     nextAction: str
+
+
+class CodeAnalyzeRequest(BaseModel):
+    code: str
+    language: str
+    context: str | None = None
+
+
+class CodeAnalyzeResponse(BaseModel):
+    summary: str
+    explanation: str
+    potentialIssues: list[str]
+    improvementSuggestions: list[str]
+
+
+class InterviewFeedbackRequest(BaseModel):
+    question: str
+    keyPoints: list[str]
+    userAnswer: str
+
+
+class InterviewFeedbackResponse(BaseModel):
+    score: int
+    includedKeyPoints: list[str]
+    missingKeyPoints: list[str]
+    feedback: str
+    improvedAnswer: str
