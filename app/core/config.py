@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     VLLM_BASE_URL: str | None = None
 
     LLM_MODEL_NAME: str = "Qwen2.5-Coder-7B-Instruct"
+    VLLM_MODEL_NAME: str = "Qwen2.5-Coder-7B-Instruct"
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 4096
     LLM_TIMEOUT_SECONDS: int = 60
