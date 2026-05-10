@@ -40,10 +40,17 @@ class GrammarQuestionService:
             )
             questions.append(
                 QuestionSchema(
-                    questionType=request.questionType,
+                    questionId=f"GQ-{idx:03d}",
+                    type=request.questionType,
                     question=question_text,
-                    answer=answer_text,
                     choices=choices,
+                    answer=answer_text,
+                    explanation=(
+                        "(mock) 기존 문법템플릿 content.sections 를 참고해 생성된 "
+                        "임시 문제 해설입니다."
+                    ),
+                    relatedSection="sections",
+                    difficulty=request.difficulty,
                 )
             )
         return GrammarGenerateQuestionsResponse(questions=questions)
