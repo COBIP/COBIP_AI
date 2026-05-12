@@ -155,12 +155,12 @@ class FeatureTemplateData(BaseModel):
 
 class FeatureTemplateGenerateResult(BaseModel):
     template: FeatureTemplateData
-    source: Literal["vllm", "ollama", "fallback"]
+    source: Literal["ollama", "fallback"]
 
 
 class FeatureTemplateGenerateResponse(BaseModel):
     template: FeatureTemplateData
-    source: Literal["vllm", "ollama", "fallback"]
+    source: Literal["ollama", "fallback"]
 
 
 class FeatureTemplateRegenerateSectionResponse(BaseModel):

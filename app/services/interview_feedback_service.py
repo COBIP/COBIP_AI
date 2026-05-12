@@ -1,6 +1,6 @@
 """면접 답변 평가 service.
 
-이 단계에서는 실제 LLM(vLLM/Qwen) 없이 키워드 포함 여부 기반 rule 로 구현한다.
+이 단계에서는 실제 외부 LLM 없이 키워드 포함 여부 기반 rule 로 구현한다.
 실제 LLM 연동은 추후 단계에서 추가한다.
 
 InterviewFeedbackRequest / InterviewFeedbackResponse 는 schemas/evaluation.py 로
