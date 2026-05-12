@@ -1,4 +1,4 @@
-"""기능템플릿 LLM 프롬프트 문자열 검증 (7-3)."""
+"""기능템플릿 LLM 프롬프트 문자열 검증 (7-3, 7-4)."""
 
 from app.models.enums import DifficultyLevel
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
@@ -92,3 +92,16 @@ def test_prompt_maps_conceptual_fields_to_schema_without_extra_keys() -> None:
 def test_prompt_forbids_schema_unknown_top_level_field_names() -> None:
     text = build_feature_template_prompt(_req())
     assert "goal/hints 단독 key" in text or "스키마에 없는 필드명" in text
+
+
+def test_prompt_7_4_content_quality_minimums_and_api_json() -> None:
+    """7-4: 실무형 품질 지시·최소 개수·apiSpec 예시 JSON·스키마 밖 key 금지 유지."""
+    text = build_feature_template_prompt(_req())
+    assert "요구사항(requirements)은 최소 3개 이상" in text
+    assert "기본 문제(basicQuestions)는 최소 3개 이상" in text
+    assert "다음 추천(nextRecommendations)은 최소 3개 이상" in text
+    assert "missions는 최소 2개 이상" in text
+    assert "interviewQuestions는 최소 3개 이상" in text
+    assert "필드 예시가 담긴 JSON 객체" in text
+    assert "requestBody·responseBody 는 필드 예시가 있는 JSON 객체" in text
+    assert "goal/hints 단독 key" in text or "keywords key 금지" in text
