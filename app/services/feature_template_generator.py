@@ -15,6 +15,7 @@ InterviewQuestionSchema, NextRecommendationSchema)의 정식 인스턴스로 만
 """
 
 import logging
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -25,6 +26,8 @@ from app.schemas.feature_template import (
     FeatureTemplateData,
     FeatureTemplateGenerateRequest,
     FeatureTemplateGenerateResult,
+    FeatureTemplateRegenerateSectionRequest,
+    FeatureTemplateRegenerateSectionResult,
     FlowSchema,
     InterviewQuestionSchema,
     LayerRoleSchema,
@@ -35,8 +38,12 @@ from app.schemas.feature_template import (
     RequirementSchema,
 )
 from app.services.feature_template_normalizer import FeatureTemplateNormalizer
+from app.services.feature_template_section_resolve import alternate_keys_for_section
 from app.services.llm_service import LLMService
-from app.services.prompt_builder import build_feature_template_prompt
+from app.services.prompt_builder import (
+    build_feature_template_prompt,
+    build_feature_template_section_prompt,
+)
 
 __all__ = ["FeatureTemplateGenerator"]
 
@@ -118,6 +125,114 @@ class FeatureTemplateGenerator:
             template=template,
             source=self._llm_service.provider,
         )
+
+    def regenerate_section(
+        self,
+        request: FeatureTemplateRegenerateSectionRequest,
+    ) -> FeatureTemplateRegenerateSectionResult:
+        """단일 섹션만 LLM 으로 재생성한 뒤 normalizer 로 보정한다."""
+
+        canonical = request.section
+        base_req = self._regenerate_request_to_generate(request)
+
+        if canonical == "codeFiles" and not request.includeCode:
+            return FeatureTemplateRegenerateSectionResult(
+                section=canonical, content=[], source="fallback"
+            )
+        if canonical == "missions" and not request.includeMissions:
+            return FeatureTemplateRegenerateSectionResult(
+                section=canonical, content=[], source="fallback"
+            )
+        if canonical == "interviewQuestions" and not request.includeInterview:
+            return FeatureTemplateRegenerateSectionResult(
+                section=canonical, content=[], source="fallback"
+            )
+
+        prompt = build_feature_template_section_prompt(
+            canonical,
+            base_req,
+            previous_content=request.previousContent,
+            current_template=request.currentTemplate,
+            user_instruction=request.userInstruction,
+            extra_tech_stack=request.techStack,
+        )
+
+        try:
+            llm_result = self._llm_service.generate_json(prompt)
+            if not isinstance(llm_result, dict) or llm_result.get("mock"):
+                raise RuntimeError("LLM unavailable or mock JSON payload")
+
+            section_value = self._pick_section_payload(llm_result, canonical)
+            skeleton = dict(FeatureTemplateNormalizer.normalize({}, base_req))
+            skeleton[canonical] = section_value
+            normalized_full = FeatureTemplateNormalizer.normalize(skeleton, base_req)
+            template = FeatureTemplateData(**normalized_full)
+            content = self._dump_template_section(template, canonical)
+        except (RuntimeError, ValidationError, TypeError, ValueError, KeyError) as exc:
+            logger.warning(
+                "Feature template section regeneration failed: section=%s, type=%s, detail=%s",
+                canonical,
+                type(exc).__name__,
+                str(exc)[:200],
+            )
+            mock = self._generate_mock_template(base_req)
+            normalized = FeatureTemplateNormalizer.normalize(
+                mock.model_dump(), base_req
+            )
+            template = FeatureTemplateData(**normalized)
+            content = self._dump_template_section(template, canonical)
+            return FeatureTemplateRegenerateSectionResult(
+                section=canonical,
+                content=content,
+                source="fallback",
+            )
+
+        return FeatureTemplateRegenerateSectionResult(
+            section=canonical,
+            content=content,
+            source=self._llm_service.provider,
+        )
+
+    @staticmethod
+    def _regenerate_request_to_generate(
+        regen: FeatureTemplateRegenerateSectionRequest,
+    ) -> FeatureTemplateGenerateRequest:
+        ref: dict[str, Any] = {}
+        if regen.currentTemplate is not None:
+            ref["currentTemplate"] = regen.currentTemplate
+        if regen.previousContent is not None:
+            ref["previousContent"] = regen.previousContent
+        if regen.techStack:
+            ref["techStack"] = regen.techStack
+
+        return FeatureTemplateGenerateRequest(
+            language=regen.language,
+            framework=regen.framework,
+            featureName=regen.featureName,
+            level=regen.level,
+            includeCode=regen.includeCode,
+            includeMissions=regen.includeMissions,
+            includeInterview=regen.includeInterview,
+            referenceContext=ref or None,
+        )
+
+    @staticmethod
+    def _pick_section_payload(raw: dict[str, Any], canonical: str) -> Any:
+        if canonical in raw and raw[canonical] is not None:
+            return raw[canonical]
+        for alt in alternate_keys_for_section(canonical):
+            if alt in raw and raw[alt] is not None:
+                return raw[alt]
+        raise KeyError(f"missing section key in LLM payload: {canonical}")
+
+    @staticmethod
+    def _dump_template_section(
+        template: FeatureTemplateData, canonical: str
+    ) -> dict[str, Any] | list[Any]:
+        val = getattr(template, canonical)
+        if isinstance(val, list):
+            return [item.model_dump() for item in val]
+        return val.model_dump()
 
     @staticmethod
     def _summarize_generation_error(exc: Exception) -> str:

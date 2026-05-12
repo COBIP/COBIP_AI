@@ -2,7 +2,10 @@
 
 from app.models.enums import DifficultyLevel
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
-from app.services.prompt_builder import build_feature_template_prompt
+from app.services.prompt_builder import (
+    build_feature_template_prompt,
+    build_feature_template_section_prompt,
+)
 
 
 def _req(**kwargs: object) -> FeatureTemplateGenerateRequest:
@@ -92,6 +95,29 @@ def test_prompt_maps_conceptual_fields_to_schema_without_extra_keys() -> None:
 def test_prompt_forbids_schema_unknown_top_level_field_names() -> None:
     text = build_feature_template_prompt(_req())
     assert "goal/hints 단독 key" in text or "스키마에 없는 필드명" in text
+
+
+def test_section_prompt_single_root_key_and_quality_rules() -> None:
+    base = FeatureTemplateGenerateRequest(
+        language="java",
+        featureName="로그인",
+        level=DifficultyLevel.BEGINNER,
+        includeCode=True,
+        includeMissions=True,
+        includeInterview=True,
+    )
+    text = build_feature_template_section_prompt(
+        "requirements",
+        base,
+        previous_content=None,
+        current_template=None,
+        user_instruction=None,
+        extra_tech_stack=["Spring Boot"],
+    )
+    assert "requirements" in text
+    assert "단일 JSON" in text or "JSON 객체" in text
+    assert "마크다운 코드블록" in text or "```" in text
+    assert "최소 3개" in text
 
 
 def test_prompt_7_4_content_quality_minimums_and_api_json() -> None:

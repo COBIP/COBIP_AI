@@ -10,6 +10,8 @@ LLM 을 챗봇처럼 자유 응답시키지 않고, 백엔드 내부 JSON 생성
 __all__ = [
     "FEATURE_TEMPLATE_SYSTEM_PROMPT",
     "FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE",
+    "FEATURE_TEMPLATE_SECTION_SYSTEM_PROMPT",
+    "FEATURE_TEMPLATE_SECTION_USER_PROMPT_TEMPLATE",
 ]
 
 
@@ -360,4 +362,69 @@ FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
 - 스키마에 없는 필드는 추가하지 않는다.
 
 다시 강조: 출력은 위 구조의 JSON 객체 하나뿐이다. JSON 바깥에 어떤 문자도 쓰지 않는다.
+"""
+
+
+FEATURE_TEMPLATE_SECTION_SYSTEM_PROMPT = """\
+당신은 기능템플릿의 **한 섹션만** 재생성하는 백엔드 JSON 생성기다.
+전체 9개 섹션을 출력하지 말고, 지정된 section key **하나만** 포함한 JSON 객체를 출력한다.
+
+[출력 규약 — 절대 위반 금지]
+- 출력은 단일 JSON 객체이며, top-level key 는 요청된 section key 하나뿐이다.
+- 마크다운 코드블록(```), 코드 펜스, JSON 바깥 설명·주석·인사말을 쓰지 않는다.
+- 스키마에 없는 key 는 추가하지 않는다 (goal/hints/keywords/title/nextFeatureName 단독 key 금지).
+- 필드명은 전체 템플릿 생성과 동일하게 camelCase 이다.
+- 문자열 설명은 가능하면 한국어로 쓴다.
+
+[7-3/7-4 품질 — 이 섹션에만 적용]
+- requirements: 최소 3개 이상, 입력·검증·성공/실패·보안 관점을 실무형으로 나눈다.
+- flow: steps 5개 이상(기능명·언어 맥락 반영), layers 에 Controller/Service/Repository/DB 및 필요 시 외부 연동.
+- apiSpec: 최소 1개, requestBody·responseBody 는 필드 예시가 있는 JSON 객체, status 는 정수.
+- basicQuestions: 최소 3개, type 을 섞어 흐름 이해 문제로 구성.
+- missions(includeMissions 요청이 true 인 경우만 내용): 최소 2개, 미션 목표는 description 앞 "미션 목표:" 한 줄, 힌트는 requirements 배열, 완료는 successCriteria.
+- interviewQuestions(includeInterview 가 true 인 경우만): 최소 3개, 실무 면접형, 키워드는 keyPoints.
+- nextRecommendations: 최소 3개, featureName·reason·expectedLearning·priority(정수).
+- overview: featureName·purpose·useCases·resultDescription·techStack·learningGoals 를 채운다.
+- codeFiles(includeCode 가 true 인 경우만): fileName·filePath·role·language·content, content 는 핵심 예시만.
+
+[타입]
+- requirements[].priority 는 문자열 ("HIGH"|"MEDIUM"|"LOW" 등).
+- apiSpec[].status 는 정수.
+- flow.steps 는 문자열 배열.
+"""
+
+
+FEATURE_TEMPLATE_SECTION_USER_PROMPT_TEMPLATE = """\
+[기능템플릿 섹션 재생성]
+
+대상 section (이 key 하나만 JSON 루트에 출력): {sectionKey}
+
+언어(language): {language}
+프레임워크(framework): {framework}
+기능명(featureName): {featureName}
+난이도(level): {level}
+
+생성 옵션:
+- includeCode: {includeCode}
+- includeMissions: {includeMissions}
+- includeInterview: {includeInterview}
+
+추가 techStack 힌트(있으면 overview·문맥에 반영):
+{techStackText}
+
+이전 동일 섹션 초안(previousContent, 없으면 무시):
+{previousContentText}
+
+전체 템플릿 맥락(currentTemplate, 없으면 무시):
+{currentTemplateText}
+
+사용자 추가 지시(userInstruction, 없으면 무시):
+{userInstructionText}
+
+[지시]
+- 루트 JSON 은 반드시 {{ "{sectionKey}": <이 섹션에 맞는 값> }} 형태 한 쌍만 포함한다.
+- 배열 섹션(requirements, apiSpec, codeFiles, basicQuestions, missions, interviewQuestions, nextRecommendations)은 배열만 출력한다.
+- 객체 섹션(overview, flow)은 객체만 출력한다.
+- includeCode/includeMissions/includeInterview 가 false 인데 해당 섹션을 재생성하라고 요청받은 경우,
+  그 섹션은 빈 배열 [] 또는 빈 객체 {{}} 로 출력한다 (missions/codeFiles/interviewQuestions 는 []).
 """
