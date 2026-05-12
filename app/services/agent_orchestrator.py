@@ -5,9 +5,13 @@ from __future__ import annotations
 import logging
 from enum import Enum
 
-from app.core.config import settings
 from app.schemas.chat import AgentPayload, ChatRequest, ChatResponseData
-from app.services.chat_service import ChatService
+from app.services.agent_handlers import (
+    FeatureTemplateHelpHandler,
+    GeneralChatHandler,
+    RagSearchHandler,
+    UnknownHandler,
+)
 
 __all__ = ["AgentIntent", "AgentOrchestrator"]
 
@@ -52,13 +56,16 @@ _GENERAL_HINTS = (
     "도와줘",
 )
 
-_UNKNOWN_REPLY = (
-    "요청 내용을 이해하지 못했습니다. 조금 더 구체적으로 입력해주세요."
-)
+_HANDLER_MAP = {
+    AgentIntent.GENERAL_CHAT.value: GeneralChatHandler(),
+    AgentIntent.RAG_SEARCH.value: RagSearchHandler(),
+    AgentIntent.FEATURE_TEMPLATE_HELP.value: FeatureTemplateHelpHandler(),
+    AgentIntent.UNKNOWN.value: UnknownHandler(),
+}
 
 
 class AgentOrchestrator:
-    """룰 기반 intent 분류 후 ChatService로 위임."""
+    """룰 기반 intent 분류 후 intent별 handler로 위임."""
 
     @staticmethod
     def classify_intent(message: str) -> str:
@@ -95,47 +102,15 @@ class AgentOrchestrator:
 
     async def run_chat(self, request: ChatRequest) -> ChatResponseData:
         intent = self.classify_intent(request.message)
-        query_len = len(request.message)
         agent = AgentPayload(
             enabled=True,
             intent=intent,
             mode="rule_based",
         )
-
-        if intent == AgentIntent.UNKNOWN.value:
-            logger.info(
-                "agent_chat intent=%s apply_rag=false query_len=%s unknown_reply=true",
-                intent,
-                query_len,
-            )
-            return ChatResponseData(
-                answer=_UNKNOWN_REPLY,
-                source="ollama",
-                ragUsed=False,
-                references=[],
-                agent=agent,
-            )
-
-        if intent == AgentIntent.RAG_SEARCH.value:
-            apply_rag = settings.RAG_ENABLED
-            variant = "default"
-        elif intent == AgentIntent.FEATURE_TEMPLATE_HELP.value:
-            apply_rag = False
-            variant = "feature_help"
-        else:
-            apply_rag = settings.RAG_ENABLED and (request.useRag is True)
-            variant = "default"
-
+        handler = _HANDLER_MAP[intent]
         logger.info(
-            "agent_chat intent=%s apply_rag=%s query_len=%s",
+            "agent_orchestrator dispatch intent=%s handler=%s",
             intent,
-            apply_rag,
-            query_len,
+            type(handler).__name__,
         )
-
-        return ChatService().answer(
-            request,
-            apply_rag=apply_rag,
-            variant=variant,
-            agent=agent,
-        )
+        return await handler.handle(request, agent)
