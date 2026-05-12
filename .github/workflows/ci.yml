@@ -31,5 +31,10 @@ jobs:
       - name: Verify Python imports (compileall)
         run: python -m compileall app
 
+      - name: Run unit tests
+        env:
+          PYTHONPATH: .
+        run: pytest tests/ -q
+
       - name: Build Docker image
         run: docker build -t cobip-fastapi-ai-server:test .
