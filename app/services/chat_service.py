@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from app.core.config import settings
-from app.schemas.chat import ChatRequest, ChatResponseData
+from app.schemas.chat import AgentPayload, ChatRequest, ChatResponseData
 from app.schemas.rag import RetrievedReference
 from app.services.llm_service import LLMService
 from app.services.retriever_service import RetrieverService
@@ -39,6 +39,14 @@ _RAG_SYSTEM_APPEND = """
 거기에 없는 사실은 확정적으로 단정하지 말고 모른다고 말한다.
 """
 
+_FEATURE_HELP_APPEND = """
+[기능 템플릿·산출물 안내]
+사용자가 기능 명세, 요구사항, API 명세, ERD, 면접 질문 등 **구조화된 산출물**을 원하는 것으로 보일 수 있다.
+- 실제 **기능 템플릿(코드/문서 골격) 생성**은 HTTP `POST /ai/feature-template/generate` 로 요청한다.
+  (JSON 예: language, featureName, level 등 — 서버 스키마를 따른다.)
+- 이 대화에서는 API 사용법·필드 의미만 간단히 안내하고, 긴 전체 코드 생성은 피한다.
+"""
+
 
 def _truncate(text: str, max_len: int) -> str:
     t = (text or "").strip()
@@ -69,30 +77,38 @@ def _format_rag_block(refs: list[RetrievedReference]) -> str:
 
 
 class ChatService:
-    """보조 Q&A 챗봇 (LLMService → Ollama). RAG_ENABLED·useRag 시 Retriever 결과를 프롬프트에 주입."""
+    """보조 Q&A 챗봇 (LLMService → Ollama). apply_rag 시 Retriever 결과를 프롬프트에 주입."""
 
-    def answer(self, request: ChatRequest) -> ChatResponseData:
+    def answer(
+        self,
+        request: ChatRequest,
+        *,
+        apply_rag: bool,
+        variant: Literal["default", "feature_help"] = "default",
+        agent: AgentPayload,
+    ) -> ChatResponseData:
         llm = LLMService()
         msg_len = len(request.message)
         has_ctx = bool(request.context and request.context.strip())
-        rag_requested = request.useRag is True
         rag_enabled = settings.RAG_ENABLED
 
         logger.info(
             "chat start provider=%s query_len=%s context_present=%s "
-            "rag_requested=%s rag_enabled=%s",
+            "rag_enabled=%s apply_rag=%s agent_intent=%s variant=%s",
             llm.provider,
             msg_len,
             has_ctx,
-            rag_requested,
             rag_enabled,
+            apply_rag,
+            agent.intent,
+            variant,
         )
 
         rag_used = False
         references: list[Any] = []
         rag_block = ""
 
-        if rag_enabled and rag_requested:
+        if apply_rag:
             try:
                 refs = RetrieverService().retrieve(
                     request.message,
@@ -111,9 +127,11 @@ class ChatService:
                 references = []
 
         user_prompt = ChatService._build_user_prompt(request, rag_block=rag_block)
-        system_prompt = (
-            _CHAT_SYSTEM_PROMPT + _RAG_SYSTEM_APPEND if rag_block else _CHAT_SYSTEM_PROMPT
-        )
+        system_prompt = _CHAT_SYSTEM_PROMPT
+        if variant == "feature_help":
+            system_prompt = system_prompt + _FEATURE_HELP_APPEND
+        if rag_block:
+            system_prompt = system_prompt + _RAG_SYSTEM_APPEND
 
         try:
             text = llm.generate_text(
@@ -126,36 +144,41 @@ class ChatService:
 
             logger.info(
                 "chat complete provider=%s source=ollama rag_used=%s "
-                "references_count=%s query_len=%s fallback=%s",
+                "references_count=%s query_len=%s fallback=%s agent_intent=%s",
                 llm.provider,
                 rag_used,
                 len(references),
                 msg_len,
                 False,
+                agent.intent,
             )
             return ChatResponseData(
                 answer=answer,
                 source="ollama",
                 ragUsed=rag_used,
                 references=references,
+                agent=agent,
             )
         except Exception as exc:
             err_type = type(exc).__name__
             logger.warning(
                 "chat failed provider=%s source=fallback errorType=%s "
-                "rag_used=%s references_count=%s query_len=%s fallback=%s",
+                "rag_used=%s references_count=%s query_len=%s fallback=%s "
+                "agent_intent=%s",
                 llm.provider,
                 err_type,
                 rag_used,
                 len(references),
                 msg_len,
                 True,
+                agent.intent,
             )
             return ChatResponseData(
                 answer=_FALLBACK_ANSWER,
                 source="fallback",
                 ragUsed=rag_used,
                 references=references,
+                agent=agent,
             )
 
     @staticmethod
