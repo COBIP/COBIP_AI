@@ -15,7 +15,13 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/ai"
 
     REDIS_URL: str | None = None
-    QDRANT_URL: str | None = None
+
+    # Qdrant (Compose 서비스명 기본; 로컬 단독은 host.docker.internal 등으로 덮어쓰기)
+    QDRANT_URL: str = "http://qdrant:6333"
+    QDRANT_COLLECTION: str = "cobip_knowledge"
+
+    # Embedding (Retriever 연동 전 단계)
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
 
     LLM_PROVIDER: str = "ollama"
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434/v1"
@@ -26,6 +32,10 @@ class Settings(BaseSettings):
 
     CACHE_TTL_SECONDS: int = 3600
     RATE_LIMIT_PER_MINUTE: int = 30
+
+    # RAG: Retriever 연동 전 토글·파라미터
+    RAG_ENABLED: bool = False
+    RAG_TOP_K: int = 3
 
 
 settings = Settings()

@@ -45,18 +45,25 @@ class LLMService:
             {"role": "user", "content": user_prompt},
         ]
 
-    def generate_text(self, prompt: str) -> str:
+    def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
         """단일 prompt 로 텍스트 응답을 받는다.
 
         OLLAMA_BASE_URL 미설정 시 mock 텍스트를 반환한다.
         설정 시에는 build_messages 로 OpenAI-호환 messages 를 만들어
         call_llm 을 호출하고 choices[0].message.content 를 반환한다.
+
+        system_prompt 가 None 이면 기본 영어 시스템 문구를 사용한다.
         """
         if not settings.OLLAMA_BASE_URL:
             return self._mock_text(prompt)
 
+        system = (
+            system_prompt
+            if system_prompt is not None
+            else "You are a helpful assistant."
+        )
         messages = self.build_messages(
-            system_prompt="You are a helpful assistant.",
+            system_prompt=system,
             user_prompt=prompt,
         )
         result = self.call_llm(messages)
