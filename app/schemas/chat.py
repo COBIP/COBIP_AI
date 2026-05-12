@@ -28,6 +28,10 @@ class AgentTrace(BaseModel):
         ge=0,
         description="오케스트레이터 기준 전체 처리 시간(ms)",
     )
+    toolCandidates: list[str] = Field(
+        default_factory=list,
+        description="intent에 매핑된 tool 이름 후보(실행 전 단계)",
+    )
 
 
 class AgentPayload(BaseModel):

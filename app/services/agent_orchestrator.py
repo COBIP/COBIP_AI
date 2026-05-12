@@ -14,12 +14,15 @@ from app.services.agent_handlers import (
     UnknownHandler,
 )
 from app.services.intent_classifier import AgentIntent, HybridIntentClassifier
+from app.services.agent_tools import AgentToolRegistry
 
 __all__ = ["AgentIntent", "AgentOrchestrator"]
 
 logger = logging.getLogger(__name__)
 
 AgentMode = Literal["rule_based", "llm_assisted", "hybrid"]
+
+_TOOL_REGISTRY = AgentToolRegistry()
 
 _HANDLER_MAP = {
     AgentIntent.GENERAL_CHAT.value: GeneralChatHandler(),
@@ -41,13 +44,18 @@ class AgentOrchestrator:
         agent_mode = result.mode
         handler = _HANDLER_MAP[intent]
         handler_name = type(handler).__name__
-        steps = list(result.steps) + ["handler_dispatch"]
+        tool_candidates = _TOOL_REGISTRY.get_tool_names_for_intent(intent)
+        steps = list(result.steps) + [
+            "tool_candidate_selection",
+            "handler_dispatch",
+        ]
         trace = AgentTrace(
             classifier=result.classifier_name,
             handler=handler_name,
             llmIntentUsed=result.llm_intent_used,
             steps=steps,
             latencyMs=0,
+            toolCandidates=tool_candidates,
         )
         agent = AgentPayload(
             enabled=True,
@@ -74,6 +82,7 @@ class AgentOrchestrator:
                 llmIntentUsed=result.llm_intent_used,
                 steps=steps,
                 latencyMs=latency_ms,
+                toolCandidates=tool_candidates,
             )
         return out.model_copy(
             update={"agent": out.agent.model_copy(update={"trace": new_trace})}
