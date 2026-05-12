@@ -21,84 +21,100 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - 출력은 반드시 단일 JSON 객체 하나뿐이다. 다른 어떤 텍스트도 출력하지 않는다.
 - 마크다운 코드블록(```), 코드 펜스, 인용 부호를 절대 사용하지 않는다.
 - JSON 바깥에 인사말·서론·결론·주석·설명 문장을 쓰지 않는다.
-- JSON 응답은 FeatureTemplateData 스키마와 정확히 같은 key 만 사용한다.
-- 9개 섹션 중 어느 하나도 누락하지 않는다 (값이 비어도 key 자체는 반드시 존재한다).
-- 스키마에 정의되지 않은 추가 key 를 만들지 않는다.
-- 모든 key 는 camelCase, 모든 문자열 값은 한국어로 작성한다.
+- JSON 응답은 아래에 정의한 top-level key 9개만 사용한다. 스키마에 없는 key 는 추가하지 않는다.
+- 9개 섹션 key 는 하나도 누락하지 않는다 (값이 비어도 key 자체는 반드시 존재한다).
+- 모든 key 는 camelCase 이다. 문자열 설명은 가능하면 한국어로 작성한다.
+- 값이 불확실하면 빈 문자열 "", 빈 배열 [], 또는 객체 필드가 필요한 경우 빈 객체 {{}} 를 사용한다.
+- 가능하면 설명 문자열은 한국어로 작성한다.
+- 스키마에 없는 필드명(title만 단독으로 nextRecommendations에 쓰기, goal/hints 단독 key 등)은 절대 추가하지 않는다.
 - requirements[].priority 는 반드시 문자열이다. 허용 예: "HIGH", "MEDIUM", "LOW"
 - apiSpec[].status 는 반드시 정수다. 허용 예: 200, 201, 400, 401
 - "200 OK" 같은 문자열 status 를 절대 사용하지 않는다.
 - flow.steps 의 각 항목은 반드시 문자열이다. 객체를 넣지 않는다.
-- missions[].missionType 은 반드시 문자열이다. 예: "implementation", "extension"
+- missions[].missionType 은 반드시 문자열이다. 예: "implementation", "extension", "validation"
 - 숫자 필드를 제외하고 문자열 필드는 반드시 문자열로 반환한다.
 
+[includeCode / includeMissions / includeInterview — user 프롬프트 값을 그대로 따른다]
+- includeCode 가 false 이면 codeFiles 는 반드시 빈 배열 [] 이다 (key 는 존재).
+- includeMissions 가 false 이면 missions 는 반드시 빈 배열 [] 이다 (key 는 존재).
+- includeInterview 가 false 이면 interviewQuestions 는 반드시 빈 배열 [] 이다 (key 는 존재).
+- 위 플래그가 true 이면 해당 배열은 의미 있는 항목을 채운다 (아래 품질 기준).
+
 [기능템플릿 고정 순서 — 절대 변경 금지]
-1. 프로젝트 개요 (overview)
-2. 요구사항 명세서 (requirements)
-3. 동작 흐름 (flow)
-4. API 명세서 (apiSpec)
-5. 전체 코드 보기 (codeFiles)
-6. 기본 문제 풀이 (basicQuestions)
-7. 실습 미션 (missions)
-8. 면접 대비 (interviewQuestions)
-9. 다른 기능 템플릿 제안 (nextRecommendations)
+1. overview → 2. requirements → 3. flow → 4. apiSpec → 5. codeFiles
+   → 6. basicQuestions → 7. missions → 8. interviewQuestions → 9. nextRecommendations
 
 [중요 위치 규칙]
-- API 명세서(apiSpec)는 반드시 동작 흐름(flow) "다음", 전체 코드 보기(codeFiles) "이전"에 위치한다.
+- apiSpec 은 flow "다음", codeFiles "이전"에 위치한다 (논리 순서).
 
 [top-level key 9개 — 이외의 key 금지]
-- overview, requirements, flow, apiSpec, codeFiles,
-  basicQuestions, missions, interviewQuestions, nextRecommendations
+overview, requirements, flow, apiSpec, codeFiles, basicQuestions, missions, interviewQuestions, nextRecommendations
 
-[overview 객체 key]
-- featureName, purpose, useCases, resultDescription, techStack, learningGoals
+[섹션별 품질 기준 — 스키마 필드명과 정확히 일치]
 
-[requirements 배열 항목 key]
-- requirementId, name, description, inputValue, processCondition,
-  successResult, failureResult, priority, relatedScreenOrApi
+1) overview (객체)
+   - featureName, purpose, useCases, resultDescription, techStack, learningGoals 를 모두 채운다.
+   - useCases·techStack·learningGoals 는 학습자가 맥락을 잡을 수 있게 각각 2개 이상 권장.
+   - techStack 에는 user 가 준 language·framework(있으면)를 반영한다.
 
-[flow 객체 key]
-- steps, layers
-  · steps: 사용자/시스템 단계 흐름을 순서대로 나열한 배열.
-  · layers: 각 항목은 { "layer": ..., "role": ... } 두 key 만 가진다.
+2) requirements (배열)
+   - 각 항목은 requirementId, name, description, inputValue, processCondition, successResult,
+     failureResult, priority, relatedScreenOrApi 를 모두 포함한다.
+   - 최소 3개 이상의 요구사항을 생성한다 (기능 범위를 나누어 R-001, R-002 … 형식의 ID 사용).
 
-[apiSpec 배열 항목 key]
-- apiName, method, endpoint, description, requestBody, responseBody, status
+3) flow (객체)
+   - steps: 문자열 배열. "Controller → Service → Repository → DB → 응답" 흐름이 드러나도록
+     5단계 이상으로 순서를 쓴다.
+   - layers: {{ "layer", "role" }} 객체 배열. Controller / Service / Repository / DB / Client 등
+     역할이 중복 없이 이해되게 작성한다.
 
-[codeFiles 배열 항목 key]
-- fileName, filePath, role, language, content
-  · content 는 실제로 동작 가능한 코드 문자열이며, 코드 펜스(```) 를 포함하지 않는다.
+4) apiSpec (배열)
+   - 각 항목은 apiName, method, endpoint, description, requestBody, responseBody, status 를 포함한다.
+   - 최소 1개 이상의 API 를 생성한다. 기능의 핵심 엔드포인트를 우선한다.
 
-[basicQuestions 배열 항목 key]
-- questionId, type, question, choices, answer, explanation,
-  relatedSection, difficulty
-  · type 이 multiple_choice 가 아니라면 choices 는 null 로 둔다.
+5) codeFiles (배열, includeCode==true 일 때만 내용 생성)
+   - 각 항목: fileName, filePath, role, language, content
+   - content 는 핵심 흐름만 담은 예시 코드로, 과도하게 길지 않게 한다 (코드 펜스 ``` 금지).
+   - filePath 는 모르면 null 또는 빈 문자열로 둘 수 있다.
 
-[missions 배열 항목 key]
-- missionId, title, description, missionType, requirements,
-  successCriteria, relatedRequirements, difficulty
+6) basicQuestions (배열)
+   - 각 항목: questionId, type, question, choices, answer, explanation, relatedSection, difficulty
+   - 초보자 확인용 문제를 최소 3개 이상 생성한다.
+   - type 이 multiple_choice 가 아니면 choices 는 null.
 
-[interviewQuestions 배열 항목 key]
-- questionId, question, keyPoints, sampleAnswer, relatedSection
+7) missions (배열, includeMissions==true 일 때만 내용 생성)
+   - 각 항목: missionId, title, description, missionType, requirements, successCriteria,
+     relatedRequirements, difficulty (스키마 고정 필드만 사용).
+   - 교육 목표(goal): description 앞부분에 "미션 목표:" 한 줄로 요약해 넣는다 (goal 이라는 key 는 쓰지 않는다).
+   - 실습 힌트(hints): requirements 문자열 배열에 단계별 힌트를 나열한다 (hints 라는 key 는 쓰지 않는다).
+   - 완료 기준(successCriteria): 검증 가능한 문장으로 배열에 나열한다.
 
-[nextRecommendations 배열 항목 key]
-- featureName, reason, expectedLearning, priority
+8) interviewQuestions (배열, includeInterview==true 일 때만 내용 생성)
+   - 각 항목: questionId, question, keyPoints, sampleAnswer, relatedSection (스키마 고정).
+   - 면접 키워드(keywords): keyPoints 배열에 답변 시 반드시 언급할 키워드·개념을 넣는다 (keywords key 금지).
+   - question, sampleAnswer 는 한국어로 구체적으로 쓴다.
+   - 난이도(difficulty) 전용 필드는 없으므로, 질문 난이도는 question 문장·sampleAnswer 깊이로 조절한다.
+
+9) nextRecommendations (배열)
+   - 각 항목: featureName(다음에 학습할 기능 이름 = nextFeatureName 개념), reason, expectedLearning, priority(정수, 1이 가장 높음).
+   - 한 줄 제목(title) 느낌은 reason 의 첫 문장을 간결하게 쓴다 (title key 금지).
+   - 권장 난이도는 expectedLearning 에 "권장 난이도: beginner" 처럼 서술한다 (difficulty key 금지).
+   - 다음 학습에 적합한 기능을 약 3개 추천한다 (priority 1,2,3 등으로 순위).
+
+[교육 관점 필수 요소 ↔ 스키마 요약]
+- basicQuestions: question, answer, explanation, type, difficulty 는 반드시 채우고,
+  questionId·choices(null 가능)·relatedSection 도 스키마대로 채운다.
 
 [enum 허용값 — 외부 값 사용 금지]
-- DifficultyLevel (difficulty 필드): "beginner" | "intermediate" | "advanced"
-- QuestionType (basicQuestions[].type 필드): "multiple_choice" | "short_answer"
-  | "fill_blank" | "output_prediction" | "code_error_find" | "code_fill"
-
-[옵션 플래그 처리]
-- includeCode 가 false 이면 codeFiles 는 반드시 빈 배열 [] 로 반환한다.
-- includeMissions 가 false 이면 missions 는 반드시 빈 배열 [] 로 반환한다.
-- includeInterview 가 false 이면 interviewQuestions 는 반드시 빈 배열 [] 로 반환한다.
-- 위 플래그가 false 인 경우에도 해당 key 자체는 반드시 존재해야 한다.
+- DifficultyLevel: "beginner" | "intermediate" | "advanced"
+- QuestionType: "multiple_choice" | "short_answer" | "fill_blank" | "output_prediction"
+  | "code_error_find" | "code_fill"
 
 [일관성 규칙]
-- requirements, apiSpec, codeFiles 는 서로 모순되지 않아야 한다.
-- relatedRequirements 는 실제로 존재하는 requirementId 만 참조한다.
-- relatedSection 은 위 9개 top-level key 이름 중 하나를 사용한다.
+- requirements, apiSpec, codeFiles 는 서로 모순되지 않게 맞춘다.
+- relatedRequirements 는 실제 존재하는 requirementId 만 참조한다.
+- relatedSection 은 top-level key 이름 중 하나를 사용한다 (overview, requirements, flow,
+  apiSpec, codeFiles, basicQuestions, missions, interviewQuestions, nextRecommendations).
 """
 
 
@@ -119,12 +135,11 @@ FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
 {referenceContext}
 
 [지시]
-- 위 입력값을 바탕으로 기능템플릿 9개 섹션을 모두 생성한다.
-- 순서는 반드시 다음을 따른다:
-  1) overview → 2) requirements → 3) flow → 4) apiSpec → 5) codeFiles
-  → 6) basicQuestions → 7) missions → 8) interviewQuestions → 9) nextRecommendations
-- apiSpec 은 flow "다음", codeFiles "이전"에 위치한다.
-- 출력은 단일 JSON 객체만 반환한다. (자유 텍스트, 마크다운 코드블록 금지)
+- 위 입력을 반드시 반영한다. overview.techStack 에 language 와 framework(미지정이 아니면)를 포함한다.
+- 요구사항은 최소 3개, 기본 문제(basicQuestions)는 최소 3개, API(apiSpec)는 최소 1개를 생성한다
+  (플래그로 배열을 비우는 경우는 예외: includeCode/includeMissions/includeInterview 규칙 우선).
+- flow 는 Controller → Service → Repository → DB 관점이 드러나게 steps 5개 이상, layers 는 역할별로 구체적으로 쓴다.
+- 출력은 단일 JSON 객체만 반환한다. (자유 텍스트·마크다운 코드블록·JSON 바깥 설명 금지)
 
 [출력 JSON 구조 — 반드시 이 형태와 동일한 key 만 사용]
 {{

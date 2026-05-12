@@ -21,6 +21,7 @@ def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> st
     조립 결과는 다음을 보장한다:
     - language / framework / featureName / level 포함
     - includeCode / includeMissions / includeInterview 옵션 반영
+    - overview.techStack 에 language·framework 반영 지시 (프롬프트 본문)
     - 기능템플릿 9개 섹션 순서 명시 (overview → requirements → flow
       → apiSpec → codeFiles → basicQuestions → missions
       → interviewQuestions → nextRecommendations)
