@@ -37,5 +37,9 @@ class Settings(BaseSettings):
     RAG_ENABLED: bool = False
     RAG_TOP_K: int = 3
 
+    # Agent /ai/chat: 룰 기본, 선택적 LLM intent 보조
+    AGENT_LLM_INTENT_ENABLED: bool = False
+    AGENT_LLM_INTENT_REFINE_GENERAL: bool = False
+
 
 settings = Settings()
