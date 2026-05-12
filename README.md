@@ -69,14 +69,15 @@ AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**
 | 미션 / 면접 / 코드 분석 service | ✅ 완료 (rule 기반 mock) |
 | 추천 service | ✅ 완료 (rule 기반 mock) |
 | 보조 챗봇 service | ✅ 완료 (mock) |
-| LLM 호출 service (`vLLM` OpenAI-호환) | ✅ 구조 완성 (mock fallback 포함) |
+| LLM 호출 service (Ollama OpenAI-호환) | ✅ 검증 완료 (`qwen2.5-coder:1.5b`) |
 | 임베딩 service (BGE-M3 자리) | ✅ 구조 완성 (deterministic mock 벡터) |
 | Qdrant service | ✅ 구조 완성 (mock, 빈 결과) |
 | Redis 클라이언트 헬퍼 | ✅ 구조 완성 (mock, `None` 반환) |
 | in-memory 캐시 + rate limit | ✅ 완료 (mock) |
 | FastAPI 라우터 (`/health`, `/ai/feature-template/*`, `/ai/grammar/*`, `/ai/quiz/*`, `/ai/mission/*`, `/ai/interview/*`, `/ai/code/*`, `/ai/chat`) | ✅ 완료 |
 | CORS 설정 | ✅ 완료 |
-| Dockerfile / docker-compose | ✅ 완료 (vLLM은 주석 예시) |
+| Dockerfile / docker-compose | ✅ 완료 (Ollama 포함) |
+| Ollama OpenAI-호환 LLM provider | ✅ 검증 완료 (`qwen2.5-coder:1.5b`) |
 
 > **현재 단계는 "내부 구조와 임시 rule 기반 service" 중심**입니다.  
 > 라우터·service·스키마의 골격을 먼저 채우고, 실제 외부 시스템 연동은 다음 단계에서 점진적으로 도입합니다.
@@ -89,10 +90,71 @@ AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**
 
 - **Qdrant** — 벡터 검색 (학습 자료/예시 코드 인덱싱)
 - **BGE-M3** — 한/영 통합 임베딩 모델
-- **vLLM** + **Qwen2.5-Coder-7B-Instruct** — OpenAI-호환 `/chat/completions` 엔드포인트로 호출
+- **Ollama** + **qwen2.5-coder:1.5b** — OpenAI-호환 `/chat/completions` provider
 - **Redis** — 응답 캐시·세션 토큰·rate limit 슬라이딩 윈도우
 
 위 시스템이 연결되기 전에는 각 service가 **결정적 mock 응답**(같은 입력 → 같은 출력)을 반환하도록 설계되어 있어, 라우터·스키마·흐름 검증을 안전하게 진행할 수 있습니다.
+
+---
+
+## Ollama LLM 실행
+
+이 AI 서버는 Ollama OpenAI-호환 API를 통해 LLM을 호출합니다.
+
+환경 파일 생성:
+
+```bash
+cp .env.example .env
+```
+
+Docker Compose 실행:
+
+```bash
+docker compose up -d
+```
+
+Ollama 모델 pull:
+
+```bash
+docker compose exec ollama ollama pull qwen2.5-coder:1.5b
+```
+
+Ollama OpenAI-호환 API 확인:
+
+```bash
+curl http://localhost:11434/v1/models
+```
+
+FastAPI 확인:
+
+```bash
+curl -I http://localhost:8000/docs
+```
+
+기능템플릿 생성 API 검증:
+
+```bash
+curl -X POST http://localhost:8000/ai/feature-template/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "Java",
+    "featureName": "login",
+    "level": "beginner"
+  }'
+```
+
+성공 기준은 응답의 `data.source`가 `"ollama"`이고 `data.template`이 존재하는 것입니다.
+
+FastAPI만 `docker run`으로 실행하고 Ollama가 호스트에서 실행 중이면 다음 예시를 사용할 수 있습니다.
+
+```bash
+docker run -d --name cobip-ai-ollama-verify -p 8000:8000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e LLM_PROVIDER=ollama \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e OLLAMA_MODEL=qwen2.5-coder:1.5b \
+  cobip-ai-server
+```
 
 ---
 
@@ -114,7 +176,7 @@ AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**
 - **httpx** (LLM 호출용)
 - **Qdrant** (벡터 DB, 추후 연동)
 - **BGE-M3** (임베딩, 추후 연동)
-- **vLLM** + **Qwen2.5-Coder-7B-Instruct** (LLM, 추후 연동)
+- **Ollama** + **qwen2.5-coder:1.5b** (LLM)
 - **Redis** (캐시, 추후 연동)
 - **Docker** / **docker-compose**
 

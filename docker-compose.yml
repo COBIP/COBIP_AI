@@ -1,13 +1,33 @@
 services:
-  fastapi-ai-server:
+  ai-server:
     build: .
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      OLLAMA_MODEL: qwen2.5-coder:1.5b
     depends_on:
+      - ollama
       - qdrant
       - redis
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -22,47 +42,6 @@ services:
     ports:
       - "6379:6379"
 
-  # ---------------------------------------------------------------------------
-  # vLLM 서비스 (주석 — 아직 실제 기동하지 않음)
-  #
-  # - vLLM 은 별도 GPU 서버에서 단독 실행하거나 본 compose 안에서 별도 컨테이너로
-  #   실행할 수 있다. FastAPI 는 VLLM_BASE_URL 환경변수를 통해 vLLM 의 OpenAI-호환
-  #   /chat/completions 엔드포인트를 호출한다 (예: http://vllm:8000/v1).
-  # - GPU 를 사용하려면 호스트에 NVIDIA 드라이버 + nvidia-container-toolkit 이
-  #   설치되어 있어야 하며, Docker 의 NVIDIA runtime 설정이 필요할 수 있다.
-  # - 아래 예시는 GPU 서버 환경(NVIDIA driver/runtime 버전, CUDA, 메모리 등)에
-  #   따라 그대로 동작하지 않을 수 있으므로, 환경에 맞춰 image / runtime /
-  #   deploy.resources 를 조정한 뒤 주석을 해제한다.
-  # - 모델명은 Qwen2.5-Coder-7B-Instruct 로 둔다.
-  # ---------------------------------------------------------------------------
-  # vllm:
-  #   image: vllm/vllm-openai:latest
-  #   command:
-  #     - "--model"
-  #     - "Qwen/Qwen2.5-Coder-7B-Instruct"
-  #     - "--served-model-name"
-  #     - "Qwen2.5-Coder-7B-Instruct"
-  #     - "--host"
-  #     - "0.0.0.0"
-  #     - "--port"
-  #     - "8000"
-  #   ports:
-  #     - "8001:8000"
-  #   ipc: host
-  #   runtime: nvidia        # NVIDIA runtime 사용 (환경에 따라 불필요할 수도 있음)
-  #   environment:
-  #     - NVIDIA_VISIBLE_DEVICES=all
-  #     - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-  #   volumes:
-  #     - vllm_cache:/root/.cache/huggingface
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
-
 volumes:
+  ollama:
   qdrant_storage:
-  # vllm_cache:    # vllm 서비스 활성화 시 주석 해제

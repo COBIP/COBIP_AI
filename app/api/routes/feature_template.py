@@ -14,11 +14,14 @@ router = APIRouter(prefix="/ai/feature-template", tags=["feature-template"])
 def generate_feature_template(
     request: FeatureTemplateGenerateRequest,
 ) -> ApiResponse:
-    template = FeatureTemplateGenerator().generate(request)
+    result = FeatureTemplateGenerator().generate(request)
     return ApiResponse(
         success=True,
         message="기능템플릿 생성이 완료되었습니다.",
-        data={"template": template.model_dump()},
+        data={
+            "template": result.template.model_dump(),
+            "source": result.source,
+        },
     )
 
 

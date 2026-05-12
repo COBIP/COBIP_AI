@@ -1,6 +1,6 @@
 """기능템플릿 기본 문제 채점 + 코드 조각 분석 service.
 
-이 단계에서는 실제 LLM(vLLM/Qwen) 호출 없이 rule 기반 임시 구현이다.
+이 단계에서는 실제 외부 LLM 호출 없이 rule 기반 임시 구현이다.
 실제 LLM 연동, 정적 분석 도구 연동은 추후 단계에서 추가한다.
 
 CodeAnalyzeRequest / CodeAnalyzeResponse 는 schemas/evaluation.py 로 이동했고,

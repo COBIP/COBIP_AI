@@ -1,8 +1,4 @@
-"""환경변수 기반 설정.
-
-이 단계에서는 설정 구조만 정의한다.
-실제 Redis / Qdrant / vLLM 연결은 추후 단계에서 추가한다.
-"""
+"""환경변수 기반 설정."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,10 +16,10 @@ class Settings(BaseSettings):
 
     REDIS_URL: str | None = None
     QDRANT_URL: str | None = None
-    VLLM_BASE_URL: str | None = None
 
-    LLM_MODEL_NAME: str = "Qwen2.5-Coder-7B-Instruct"
-    VLLM_MODEL_NAME: str = "Qwen2.5-Coder-7B-Instruct"
+    LLM_PROVIDER: str = "ollama"
+    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434/v1"
+    OLLAMA_MODEL: str = "qwen2.5-coder:1.5b"
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 4096
     LLM_TIMEOUT_SECONDS: int = 60

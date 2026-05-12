@@ -25,6 +25,12 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - 9개 섹션 중 어느 하나도 누락하지 않는다 (값이 비어도 key 자체는 반드시 존재한다).
 - 스키마에 정의되지 않은 추가 key 를 만들지 않는다.
 - 모든 key 는 camelCase, 모든 문자열 값은 한국어로 작성한다.
+- requirements[].priority 는 반드시 문자열이다. 허용 예: "HIGH", "MEDIUM", "LOW"
+- apiSpec[].status 는 반드시 정수다. 허용 예: 200, 201, 400, 401
+- "200 OK" 같은 문자열 status 를 절대 사용하지 않는다.
+- flow.steps 의 각 항목은 반드시 문자열이다. 객체를 넣지 않는다.
+- missions[].missionType 은 반드시 문자열이다. 예: "implementation", "extension"
+- 숫자 필드를 제외하고 문자열 필드는 반드시 문자열로 반환한다.
 
 [기능템플릿 고정 순서 — 절대 변경 금지]
 1. 프로젝트 개요 (overview)
@@ -139,7 +145,7 @@ FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
       "processCondition": "...",
       "successResult": "...",
       "failureResult": "...",
-      "priority": 1,
+      "priority": "HIGH",
       "relatedScreenOrApi": "..."
     }}
   ],
@@ -159,7 +165,7 @@ FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
       "description": "...",
       "requestBody": {{ "...": "..." }},
       "responseBody": {{ "...": "..." }},
-      "status": "200 OK"
+      "status": 200
     }}
   ],
   "codeFiles": [
@@ -223,6 +229,14 @@ FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
 - difficulty: "beginner" | "intermediate" | "advanced"
 - basicQuestions[].type: "multiple_choice" | "short_answer" | "fill_blank"
   | "output_prediction" | "code_error_find" | "code_fill"
+
+[타입 규칙 — 반드시 준수]
+- requirements[].priority 는 문자열로만 반환한다. 예: "HIGH", "MEDIUM", "LOW"
+- apiSpec[].status 는 정수로만 반환한다. 예: 200, 201, 400, 401
+- "200 OK" 같은 문자열 status 는 금지한다.
+- flow.steps 는 문자열 배열이다. 각 단계는 "1. 요청 수신" 같은 문자열로 작성한다.
+- missions[].missionType 은 문자열이다. 예: "implementation", "extension"
+- 스키마에 없는 필드는 추가하지 않는다.
 
 다시 강조: 출력은 위 구조의 JSON 객체 하나뿐이다. JSON 바깥에 어떤 문자도 쓰지 않는다.
 """
