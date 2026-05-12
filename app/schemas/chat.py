@@ -4,9 +4,30 @@ from pydantic import BaseModel, Field, field_validator
 
 __all__ = [
     "AgentPayload",
+    "AgentTrace",
     "ChatRequest",
     "ChatResponseData",
 ]
+
+
+class AgentTrace(BaseModel):
+    """에이전트 관측·디버깅용 trace (/ai/chat data.agent.trace, 선택)."""
+
+    classifier: str = Field(..., description="사용한 intent classifier 이름")
+    handler: str = Field(..., description="실행한 handler 클래스 이름")
+    llmIntentUsed: bool = Field(
+        default=False,
+        description="LLM intent classifier 호출 여부",
+    )
+    steps: list[str] = Field(
+        default_factory=list,
+        description="처리 단계 식별자 목록",
+    )
+    latencyMs: int = Field(
+        default=0,
+        ge=0,
+        description="오케스트레이터 기준 전체 처리 시간(ms)",
+    )
 
 
 class AgentPayload(BaseModel):
@@ -17,6 +38,10 @@ class AgentPayload(BaseModel):
     mode: Literal["rule_based", "llm_assisted", "hybrid"] = Field(
         default="rule_based",
         description="intent 분류: rule_based 기본, LLM 보조 시 llm_assisted 또는 hybrid",
+    )
+    trace: AgentTrace | None = Field(
+        default=None,
+        description="관측용 trace; 구 클라이언트 호환을 위해 생략 가능",
     )
 
 

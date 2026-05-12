@@ -13,6 +13,7 @@ from app.services.llm_service import LLMService
 __all__ = [
     "AgentIntent",
     "HybridIntentClassifier",
+    "IntentClassificationResult",
     "LLMIntentClassifier",
     "RuleBasedIntentClassifier",
 ]
@@ -70,6 +71,19 @@ _VALID_INTENTS = frozenset(
         AgentIntent.UNKNOWN.value,
     }
 )
+
+_HYBRID_CLASSIFIER_NAME = "HybridIntentClassifier"
+
+
+@dataclass(frozen=True)
+class IntentClassificationResult:
+    """HybridIntentClassifier.classify 결과 (intent·mode·trace용 메타)."""
+
+    intent: str
+    mode: str
+    classifier_name: str
+    llm_intent_used: bool
+    steps: tuple[str, ...]
 
 
 class RuleBasedIntentClassifier:
@@ -204,28 +218,63 @@ class HybridIntentClassifier:
         self._rule = rule or RuleBasedIntentClassifier()
         self._llm = llm or LLMIntentClassifier()
 
-    def classify(self, message: str) -> tuple[str, str]:
-        """(intent, agent_mode) — agent_mode는 rule_based | llm_assisted | hybrid."""
+    def classify(self, message: str) -> IntentClassificationResult:
+        steps: list[str] = ["rule_based_intent_classification"]
         rule_intent = self._rule.classify(message)
+        llm_used = False
 
         if rule_intent == AgentIntent.UNKNOWN.value and settings.AGENT_LLM_INTENT_ENABLED:
+            steps.append("llm_intent_classification")
+            llm_used = True
             out = self._llm.classify(message)
             if out.ok and out.intent in _VALID_INTENTS:
-                return out.intent, _AGENT_MODE_LLM
-            return AgentIntent.UNKNOWN.value, _AGENT_MODE_RULE
+                return IntentClassificationResult(
+                    intent=out.intent,
+                    mode=_AGENT_MODE_LLM,
+                    classifier_name=_HYBRID_CLASSIFIER_NAME,
+                    llm_intent_used=llm_used,
+                    steps=tuple(steps),
+                )
+            return IntentClassificationResult(
+                intent=AgentIntent.UNKNOWN.value,
+                mode=_AGENT_MODE_RULE,
+                classifier_name=_HYBRID_CLASSIFIER_NAME,
+                llm_intent_used=llm_used,
+                steps=tuple(steps),
+            )
 
         if (
             rule_intent == AgentIntent.GENERAL_CHAT.value
             and settings.AGENT_LLM_INTENT_ENABLED
             and settings.AGENT_LLM_INTENT_REFINE_GENERAL
         ):
+            steps.append("llm_intent_refinement")
+            llm_used = True
             out = self._llm.classify(message)
             if (
                 out.ok
                 and out.intent in _VALID_INTENTS
                 and out.intent != AgentIntent.UNKNOWN.value
             ):
-                return out.intent, _AGENT_MODE_HYBRID
-            return rule_intent, _AGENT_MODE_RULE
+                return IntentClassificationResult(
+                    intent=out.intent,
+                    mode=_AGENT_MODE_HYBRID,
+                    classifier_name=_HYBRID_CLASSIFIER_NAME,
+                    llm_intent_used=llm_used,
+                    steps=tuple(steps),
+                )
+            return IntentClassificationResult(
+                intent=rule_intent,
+                mode=_AGENT_MODE_RULE,
+                classifier_name=_HYBRID_CLASSIFIER_NAME,
+                llm_intent_used=llm_used,
+                steps=tuple(steps),
+            )
 
-        return rule_intent, _AGENT_MODE_RULE
+        return IntentClassificationResult(
+            intent=rule_intent,
+            mode=_AGENT_MODE_RULE,
+            classifier_name=_HYBRID_CLASSIFIER_NAME,
+            llm_intent_used=False,
+            steps=tuple(steps),
+        )
