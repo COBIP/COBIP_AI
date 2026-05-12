@@ -85,6 +85,16 @@ AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**
 
 ---
 
+## 로컬 단위 테스트
+
+`tests/`에서 `app` 패키지를 import하려면 프로젝트 루트를 `PYTHONPATH`에 포함합니다.
+
+```bash
+PYTHONPATH=. pytest tests/ -q
+```
+
+---
+
 ## RAG / Qdrant / Embedding 설정 (6-3)
 
 - `/ai/chat`은 여전히 **Ollama 기본 챗봇**이며, `useRag`·`ragUsed`·`references`는 **필드만 준비**된 상태입니다.

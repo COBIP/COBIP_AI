@@ -15,7 +15,6 @@ InterviewQuestionSchema, NextRecommendationSchema)의 정식 인스턴스로 만
 """
 
 import logging
-import re
 
 from pydantic import ValidationError
 
@@ -35,6 +34,7 @@ from app.schemas.feature_template import (
     QuestionSchema,
     RequirementSchema,
 )
+from app.services.feature_template_normalizer import FeatureTemplateNormalizer
 from app.services.llm_service import LLMService
 from app.services.prompt_builder import build_feature_template_prompt
 
@@ -42,52 +42,6 @@ __all__ = ["FeatureTemplateGenerator"]
 
 
 logger = logging.getLogger(__name__)
-
-
-_PRIORITY_NUMBER_MAP: dict[int, str] = {
-    1: "HIGH",
-    2: "MEDIUM",
-    3: "LOW",
-}
-
-_TOP_LEVEL_STRING_FIELDS: dict[str, tuple[str, ...]] = {
-    "overview": ("featureName", "purpose", "resultDescription"),
-    "flow.layers": ("layer", "role"),
-    "requirements": (
-        "requirementId",
-        "name",
-        "description",
-        "inputValue",
-        "processCondition",
-        "successResult",
-        "failureResult",
-        "priority",
-        "relatedScreenOrApi",
-    ),
-    "apiSpec": ("apiName", "method", "endpoint", "description"),
-    "codeFiles": ("fileName", "role", "language", "content"),
-    "basicQuestions": (
-        "questionId",
-        "type",
-        "question",
-        "answer",
-        "explanation",
-        "relatedSection",
-        "difficulty",
-    ),
-    "missions": ("missionId", "title", "description", "missionType", "difficulty"),
-    "interviewQuestions": ("questionId", "question", "sampleAnswer", "relatedSection"),
-    "nextRecommendations": ("featureName", "reason", "expectedLearning"),
-}
-
-_STRING_LIST_FIELDS: dict[str, tuple[str, ...]] = {
-    "overview": ("useCases", "techStack", "learningGoals"),
-    "flow": ("steps",),
-    "basicQuestions": ("choices",),
-    "missions": ("requirements", "successCriteria", "relatedRequirements"),
-    "interviewQuestions": ("keyPoints",),
-}
-
 
 _LANGUAGE_EXTENSION: dict[str, str] = {
     "python": "py",
@@ -111,249 +65,13 @@ def _extension_for(language: str) -> str:
     return _LANGUAGE_EXTENSION.get(language.lower(), "txt")
 
 
-def _coerce_to_string(value: object) -> str:
-    if isinstance(value, dict):
-        return " ".join(str(item) for item in value.values())
-    if isinstance(value, list):
-        return " ".join(str(item) for item in value)
-    return "" if value is None else str(value)
-
-
-def _normalize_string_fields(
-    item: dict,
-    fields: tuple[str, ...],
-    path_prefix: str,
-    changed_fields: list[str],
-) -> dict:
-    normalized_item = dict(item)
-    for field in fields:
-        if field not in normalized_item:
-            continue
-        value = normalized_item[field]
-        if value is None and field in {"filePath", "relatedSection"}:
-            continue
-        if not isinstance(value, str):
-            normalized_item[field] = _coerce_to_string(value)
-            changed_fields.append(f"{path_prefix}.{field}")
-    return normalized_item
-
-
-def _normalize_string_list_field(
-    item: dict,
-    field: str,
-    path_prefix: str,
-    changed_fields: list[str],
-) -> dict:
-    if field not in item:
-        return item
-
-    normalized_item = dict(item)
-    values = normalized_item[field]
-    if values is None and field == "choices":
-        return normalized_item
-    if not isinstance(values, list):
-        normalized_item[field] = [_coerce_to_string(values)]
-        changed_fields.append(f"{path_prefix}.{field}")
-        return normalized_item
-
-    normalized_values = []
-    changed = False
-    for value in values:
-        if isinstance(value, str):
-            normalized_values.append(value)
-        else:
-            normalized_values.append(_coerce_to_string(value))
-            changed = True
-    if changed:
-        normalized_item[field] = normalized_values
-        changed_fields.append(f"{path_prefix}.{field}")
-    return normalized_item
-
-
-def _normalize_feature_template_payload(payload: dict) -> dict:
-    """LLM 응답에서 자주 흔들리는 타입만 Pydantic 검증 전에 보정한다."""
-    if not isinstance(payload, dict):
-        return payload
-
-    normalized = dict(payload)
-    changed_fields: list[str] = []
-
-    requirements = normalized.get("requirements")
-    if isinstance(requirements, list):
-        normalized_requirements = []
-        for index, item in enumerate(requirements):
-            if not isinstance(item, dict):
-                normalized_requirements.append(item)
-                continue
-
-            normalized_item = _normalize_string_fields(
-                item,
-                _TOP_LEVEL_STRING_FIELDS["requirements"],
-                f"requirements[{index}]",
-                changed_fields,
-            )
-            priority = normalized_item.get("priority")
-            if isinstance(priority, int):
-                normalized_item["priority"] = _PRIORITY_NUMBER_MAP.get(
-                    priority,
-                    str(priority),
-                )
-                changed_fields.append(f"requirements[{index}].priority")
-            elif isinstance(priority, str) and priority.strip().isdigit():
-                normalized_item["priority"] = _PRIORITY_NUMBER_MAP.get(
-                    int(priority.strip()),
-                    priority,
-                )
-                changed_fields.append(f"requirements[{index}].priority")
-            elif priority is not None and not isinstance(priority, str):
-                normalized_item["priority"] = str(priority)
-                changed_fields.append(f"requirements[{index}].priority")
-            normalized_requirements.append(normalized_item)
-        normalized["requirements"] = normalized_requirements
-
-    api_specs = normalized.get("apiSpec")
-    if isinstance(api_specs, list):
-        normalized_api_specs = []
-        for index, item in enumerate(api_specs):
-            if not isinstance(item, dict):
-                normalized_api_specs.append(item)
-                continue
-
-            normalized_item = _normalize_string_fields(
-                item,
-                _TOP_LEVEL_STRING_FIELDS["apiSpec"],
-                f"apiSpec[{index}]",
-                changed_fields,
-            )
-            status = normalized_item.get("status")
-            if isinstance(status, str):
-                match = re.search(r"\d{3}", status)
-                if match:
-                    normalized_item["status"] = int(match.group())
-                    changed_fields.append(f"apiSpec[{index}].status")
-                else:
-                    logger.warning(
-                        "Feature template normalization skipped: field=apiSpec[%s].status reason=unparseable",
-                        index,
-                    )
-            normalized_api_specs.append(normalized_item)
-        normalized["apiSpec"] = normalized_api_specs
-
-    flow = normalized.get("flow")
-    if isinstance(flow, dict):
-        normalized_flow = dict(flow)
-        normalized_flow = _normalize_string_list_field(
-            normalized_flow,
-            "steps",
-            "flow",
-            changed_fields,
-        )
-        layers = normalized_flow.get("layers")
-        if isinstance(layers, list):
-            normalized_layers = []
-            for index, item in enumerate(layers):
-                if isinstance(item, dict):
-                    normalized_layers.append(
-                        _normalize_string_fields(
-                            item,
-                            _TOP_LEVEL_STRING_FIELDS["flow.layers"],
-                            f"flow.layers[{index}]",
-                            changed_fields,
-                        )
-                    )
-                else:
-                    normalized_layers.append(item)
-            normalized_flow["layers"] = normalized_layers
-        normalized["flow"] = normalized_flow
-
-    missions = normalized.get("missions")
-    if isinstance(missions, list):
-        normalized_missions = []
-        for index, item in enumerate(missions):
-            if not isinstance(item, dict):
-                normalized_missions.append(item)
-                continue
-
-            normalized_item = _normalize_string_fields(
-                item,
-                _TOP_LEVEL_STRING_FIELDS["missions"],
-                f"missions[{index}]",
-                changed_fields,
-            )
-            for field in _STRING_LIST_FIELDS["missions"]:
-                normalized_item = _normalize_string_list_field(
-                    normalized_item,
-                    field,
-                    f"missions[{index}]",
-                    changed_fields,
-                )
-            mission_type = normalized_item.get("missionType")
-            if mission_type is None:
-                normalized_item["missionType"] = "implementation"
-                changed_fields.append(f"missions[{index}].missionType")
-            elif not isinstance(mission_type, str):
-                normalized_item["missionType"] = str(mission_type)
-                changed_fields.append(f"missions[{index}].missionType")
-            normalized_missions.append(normalized_item)
-        normalized["missions"] = normalized_missions
-
-    overview = normalized.get("overview")
-    if isinstance(overview, dict):
-        normalized_overview = _normalize_string_fields(
-            overview,
-            _TOP_LEVEL_STRING_FIELDS["overview"],
-            "overview",
-            changed_fields,
-        )
-        for field in _STRING_LIST_FIELDS["overview"]:
-            normalized_overview = _normalize_string_list_field(
-                normalized_overview,
-                field,
-                "overview",
-                changed_fields,
-            )
-        normalized["overview"] = normalized_overview
-
-    for section in ("codeFiles", "basicQuestions", "interviewQuestions", "nextRecommendations"):
-        items = normalized.get(section)
-        if not isinstance(items, list):
-            continue
-        normalized_items = []
-        for index, item in enumerate(items):
-            if not isinstance(item, dict):
-                normalized_items.append(item)
-                continue
-            normalized_item = _normalize_string_fields(
-                item,
-                _TOP_LEVEL_STRING_FIELDS[section],
-                f"{section}[{index}]",
-                changed_fields,
-            )
-            for field in _STRING_LIST_FIELDS.get(section, ()):
-                normalized_item = _normalize_string_list_field(
-                    normalized_item,
-                    field,
-                    f"{section}[{index}]",
-                    changed_fields,
-                )
-            normalized_items.append(normalized_item)
-        normalized[section] = normalized_items
-
-    if changed_fields:
-        logger.info(
-            "Feature template LLM payload normalized: fields=%s",
-            ",".join(changed_fields),
-        )
-
-    return normalized
-
-
 class FeatureTemplateGenerator:
     """기능템플릿 생성기.
 
     1) build_feature_template_prompt(request) 로 프롬프트를 조립.
     2) LLMService().generate_json(prompt) 로 dict 응답을 받음.
-    3) FeatureTemplateData(**llm_result) 로 정식 Pydantic 검증.
+    3) FeatureTemplateNormalizer.normalize 로 9개 섹션 보장 후 타입 보정.
+    4) FeatureTemplateData(**normalized) 로 정식 Pydantic 검증.
     4) 어떤 단계에서든 실패하면(Ollama URL 미설정, 네트워크/타임아웃,
        JSON 파싱 실패, 스키마 검증 실패) mock fallback 으로 떨어진다.
 
@@ -369,8 +87,8 @@ class FeatureTemplateGenerator:
 
         try:
             llm_result = self._llm_service.generate_json(prompt)
-            llm_result = _normalize_feature_template_payload(llm_result)
-            template = FeatureTemplateData(**llm_result)
+            normalized_dict = FeatureTemplateNormalizer.normalize(llm_result, request)
+            template = FeatureTemplateData(**normalized_dict)
         except (RuntimeError, ValidationError, TypeError, ValueError) as exc:
             # LLM 호출 실패 / JSON 파싱 실패 / 스키마 검증 실패
             # → mock fallback 으로 안전하게 떨어진다.
@@ -383,8 +101,12 @@ class FeatureTemplateGenerator:
                 type(exc).__name__,
                 self._summarize_generation_error(exc),
             )
+            mock = self._generate_mock_template(request)
+            normalized = FeatureTemplateNormalizer.normalize(
+                mock.model_dump(), request
+            )
             return FeatureTemplateGenerateResult(
-                template=self._generate_mock_template(request),
+                template=FeatureTemplateData(**normalized),
                 source="fallback",
             )
 
