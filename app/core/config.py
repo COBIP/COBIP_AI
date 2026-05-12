@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     QDRANT_URL: str | None = None
     VLLM_BASE_URL: str | None = None
 
+    LLM_PROVIDER: str = "vllm"
     LLM_MODEL_NAME: str = "Qwen2.5-Coder-7B-Instruct"
+    VLLM_MODEL: str | None = None
     VLLM_MODEL_NAME: str = "Qwen2.5-Coder-7B-Instruct"
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 4096

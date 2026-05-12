@@ -77,6 +77,7 @@ AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**
 | FastAPI 라우터 (`/health`, `/ai/feature-template/*`, `/ai/grammar/*`, `/ai/quiz/*`, `/ai/mission/*`, `/ai/interview/*`, `/ai/code/*`, `/ai/chat`) | ✅ 완료 |
 | CORS 설정 | ✅ 완료 |
 | Dockerfile / docker-compose | ✅ 완료 (vLLM은 주석 예시) |
+| Ollama OpenAI-호환 LLM provider | ✅ 검증 완료 (`qwen2.5-coder:1.5b`) |
 
 > **현재 단계는 "내부 구조와 임시 rule 기반 service" 중심**입니다.  
 > 라우터·service·스키마의 골격을 먼저 채우고, 실제 외부 시스템 연동은 다음 단계에서 점진적으로 도입합니다.
@@ -89,10 +90,64 @@ AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**
 
 - **Qdrant** — 벡터 검색 (학습 자료/예시 코드 인덱싱)
 - **BGE-M3** — 한/영 통합 임베딩 모델
-- **vLLM** + **Qwen2.5-Coder-7B-Instruct** — OpenAI-호환 `/chat/completions` 엔드포인트로 호출
+- **Ollama** + **qwen2.5-coder:1.5b** — 현재 검증용 OpenAI-호환 `/chat/completions` provider
+- **vLLM** + **Qwen2.5-Coder-7B-Instruct** — RTX 5070 Ti / SM120 환경에서 공식 이미지 실행 이슈로 보류
 - **Redis** — 응답 캐시·세션 토큰·rate limit 슬라이딩 윈도우
 
 위 시스템이 연결되기 전에는 각 service가 **결정적 mock 응답**(같은 입력 → 같은 출력)을 반환하도록 설계되어 있어, 라우터·스키마·흐름 검증을 안전하게 진행할 수 있습니다.
+
+---
+
+## Ollama LLM 실행 설정
+
+현재 검증용 LLM provider는 Ollama입니다. `vLLM` 공식 이미지는 RTX 5070 Ti / SM120 환경에서 서버 준비 상태까지 가지 못해 보류했으며, FastAPI는 OpenAI-호환 API 형태로 Ollama를 호출합니다.
+
+`.env` 또는 Docker 실행 환경변수 예시는 다음과 같습니다.
+
+```env
+LLM_PROVIDER=ollama
+VLLM_BASE_URL=http://host.docker.internal:11434/v1
+VLLM_MODEL=qwen2.5-coder:1.5b
+```
+
+`VLLM_BASE_URL` 이름은 기존 호환성을 위해 유지합니다. 값은 Ollama OpenAI-호환 주소를 넣을 수 있습니다. FastAPI를 Docker로 실행하고 Ollama가 호스트의 `11434` 포트에서 실행 중인 Linux 환경에서는 `--add-host=host.docker.internal:host-gateway` 옵션이 필요할 수 있습니다.
+
+Ollama가 같은 `docker-compose` 네트워크의 `ollama` 서비스로 실행된다면 다음 주소를 사용할 수 있습니다.
+
+```env
+VLLM_BASE_URL=http://ollama:11434/v1
+```
+
+Ollama OpenAI-호환 API 확인:
+
+```bash
+curl http://localhost:11434/v1/models
+```
+
+FastAPI 컨테이너 실행 예시:
+
+```bash
+docker run -d --name cobip-ai-ollama-verify -p 8000:8000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e LLM_PROVIDER=ollama \
+  -e VLLM_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e VLLM_MODEL=qwen2.5-coder:1.5b \
+  cobip-ai-server
+```
+
+기능템플릿 생성 API 검증:
+
+```bash
+curl -X POST http://localhost:8000/ai/feature-template/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "Java",
+    "featureName": "login",
+    "level": "beginner"
+  }'
+```
+
+성공 기준은 응답의 `data.source`가 `"ollama"`이고 `data.template`이 존재하는 것입니다.
 
 ---
 

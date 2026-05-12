@@ -1,4 +1,4 @@
-"""vLLM (OpenAI-호환 /chat/completions) 호출 service.
+"""OpenAI-호환 /chat/completions 호출 service.
 
 이 단계에서는 호출 "구조"만 만든다.
 - VLLM_BASE_URL 이 설정되어 있으면 실제 OpenAI-호환 엔드포인트로 POST.
@@ -6,11 +6,13 @@
   안전하게 의존할 수 있도록 한다.
 - 오류는 RuntimeError 로 통일해 던진다 (네트워크 오류·타임아웃·파싱 실패 등).
 
-vLLM 자체는 FastAPI 서버에 설치하지 않는다.
-GPU 서버 또는 별도 컨테이너에서 실행되는 vLLM 의 OpenAI-호환 HTTP API 만 호출한다.
+LLM 서버 자체는 FastAPI 서버에 설치하지 않는다.
+GPU 서버 또는 별도 컨테이너에서 실행되는 OpenAI-호환 HTTP API 만 호출한다.
 """
 
 import json
+import logging
+import re
 
 import httpx
 
@@ -19,12 +21,20 @@ from app.core.config import settings
 __all__ = ["LLMService"]
 
 
+logger = logging.getLogger(__name__)
+
+
 class LLMService:
-    """vLLM (OpenAI-호환) 호출 service (mock fallback 포함)."""
+    """OpenAI-호환 LLM 호출 service (mock fallback 포함)."""
 
     # ------------------------------------------------------------------
     # public
     # ------------------------------------------------------------------
+    @property
+    def provider(self) -> str:
+        provider = settings.LLM_PROVIDER.strip().lower()
+        return "ollama" if provider == "ollama" else "vllm"
+
     def build_messages(
         self,
         system_prompt: str,
@@ -57,29 +67,16 @@ class LLMService:
         """단일 prompt 로 JSON 응답을 받아 dict 로 반환한다.
 
         VLLM_BASE_URL 미설정 시 mock dict 를 반환한다.
-        설정 시 generate_text() 결과를 strict JSON(dict) 로 파싱한다.
+        설정 시 generate_text() 결과에서 첫 JSON object 를 파싱한다.
         """
         if not settings.VLLM_BASE_URL:
             return self._mock_json(prompt)
 
         text = self.generate_text(prompt)
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                "LLM 응답을 JSON 으로 파싱할 수 없습니다. "
-                f"앞 200자: {text[:200]!r}"
-            ) from exc
-
-        if not isinstance(parsed, dict):
-            raise RuntimeError(
-                "LLM 응답 JSON 타입이 dict 가 아닙니다. "
-                f"실제 타입: {type(parsed).__name__}"
-            )
-        return parsed
+        return self._parse_json_object(text)
 
     def call_vllm(self, messages: list[dict]) -> dict:
-        """vLLM /chat/completions 엔드포인트를 호출한다.
+        """OpenAI-호환 /chat/completions 엔드포인트를 호출한다.
 
         VLLM_BASE_URL 미설정 시 mock OpenAI-호환 응답을 반환한다.
         네트워크 오류·HTTP 오류·타임아웃은 RuntimeError 로 감싸 던진다.
@@ -89,7 +86,11 @@ class LLMService:
             return self._mock_response(messages)
 
         url = f"{settings.VLLM_BASE_URL.rstrip('/')}/chat/completions"
-        model_name = getattr(settings, "VLLM_MODEL_NAME", settings.LLM_MODEL_NAME)
+        model_name = (
+            settings.VLLM_MODEL
+            or settings.VLLM_MODEL_NAME
+            or settings.LLM_MODEL_NAME
+        )
         payload = {
             "model": model_name,
             "messages": messages,
@@ -97,10 +98,16 @@ class LLMService:
             "max_tokens": settings.LLM_MAX_TOKENS,
         }
 
+        logger.info(
+            "provider=%s mode=llm_call model=%s",
+            self.provider,
+            model_name,
+        )
         try:
             with httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
+                logger.info("provider=%s mode=llm_ok", self.provider)
                 return response.json()
         except httpx.TimeoutException as exc:
             raise RuntimeError(
@@ -136,6 +143,31 @@ class LLMService:
                 f"LLM 응답 content 가 문자열이 아닙니다: {type(content).__name__}"
             )
         return content
+
+    @staticmethod
+    def _parse_json_object(text: str) -> dict:
+        cleaned = re.sub(r"```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        cleaned = cleaned.replace("```", "").strip()
+
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(cleaned):
+            if char != "{":
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(cleaned[index:])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                raise RuntimeError(
+                    "LLM 응답 JSON 타입이 dict 가 아닙니다. "
+                    f"실제 타입: {type(parsed).__name__}"
+                )
+            return parsed
+
+        raise RuntimeError(
+            "LLM 응답에서 JSON object 를 찾을 수 없습니다. "
+            f"앞 200자: {cleaned[:200]!r}"
+        )
 
     # ------------------------------------------------------------------
     # internal: mock fallbacks (VLLM_BASE_URL 미설정 시)

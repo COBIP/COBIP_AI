@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.models.enums import DifficultyLevel, FeatureTemplateSection, QuestionType
@@ -16,6 +18,7 @@ __all__ = [
     "InterviewQuestionSchema",
     "NextRecommendationSchema",
     "FeatureTemplateData",
+    "FeatureTemplateGenerateResult",
     "FeatureTemplateGenerateResponse",
     "FeatureTemplateRegenerateSectionResponse",
 ]
@@ -150,8 +153,14 @@ class FeatureTemplateData(BaseModel):
     nextRecommendations: list[NextRecommendationSchema]
 
 
+class FeatureTemplateGenerateResult(BaseModel):
+    template: FeatureTemplateData
+    source: Literal["vllm", "ollama", "fallback"]
+
+
 class FeatureTemplateGenerateResponse(BaseModel):
     template: FeatureTemplateData
+    source: Literal["vllm", "ollama", "fallback"]
 
 
 class FeatureTemplateRegenerateSectionResponse(BaseModel):
