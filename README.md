@@ -39,6 +39,8 @@
 8. 면접 대비
 9. 다른 기능 템플릿 제안
 
+기능템플릿 **HTTP 요청/응답 필드·9섹션 매핑·재생성·프론트 연동**은 [docs/feature-template-api-guide.md](docs/feature-template-api-guide.md)를 참고합니다.
+
 ### 2. 문법 문제 생성 / 채점
 기존 문법템플릿의 본문(JSONB content)은 **AI가 생성·수정하지 않습니다.**
 AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**만 수행합니다.
