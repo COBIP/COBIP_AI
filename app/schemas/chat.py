@@ -14,9 +14,9 @@ class AgentPayload(BaseModel):
 
     enabled: bool = Field(default=True, description="에이전트 오케스트레이션 사용 여부")
     intent: str = Field(..., description="분류된 intent (GENERAL_CHAT 등)")
-    mode: Literal["rule_based"] = Field(
+    mode: Literal["rule_based", "llm_assisted", "hybrid"] = Field(
         default="rule_based",
-        description="intent 분류 방식 (현 단계는 rule_based 고정)",
+        description="intent 분류: rule_based 기본, LLM 보조 시 llm_assisted 또는 hybrid",
     )
 
 
