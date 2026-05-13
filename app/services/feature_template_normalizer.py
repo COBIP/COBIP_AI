@@ -237,10 +237,18 @@ def _java_class_prefix(request: FeatureTemplateGenerateRequest | None) -> str:
 def _is_java_spring(request: FeatureTemplateGenerateRequest | None) -> bool:
     if request is None:
         return False
-    if request.language.lower() != "java":
+    if (request.language or "").lower() != "java":
         return False
-    fw = (request.framework or "").lower().replace("_", "-")
-    return "spring" in fw
+
+    framework = getattr(request, "framework", "") or ""
+    tech_stack = (
+        getattr(request, "techStack", None)
+        or getattr(request, "tech_stack", None)
+        or ""
+    )
+
+    target = f"{framework} {tech_stack}".lower().replace("_", "-")
+    return "spring" in target
 
 
 def _is_login_feature_request(request: FeatureTemplateGenerateRequest | None) -> bool:
