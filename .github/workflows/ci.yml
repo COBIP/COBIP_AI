@@ -1,6 +1,6 @@
 name: CI
 
-on:
+"on":
   push:
     branches:
       - develop
@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    name: Lint imports & build Docker image
+    name: Lint imports, test, and build Docker image
     runs-on: ubuntu-latest
 
     steps:
@@ -28,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify Python imports (compileall)
+      - name: Verify Python imports
         run: python -m compileall app
 
       - name: Run unit tests
