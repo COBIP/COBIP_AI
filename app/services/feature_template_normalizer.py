@@ -491,7 +491,14 @@ def _ensure_final_login_defense(
         normalized["requirements"] = _default_login_requirements(request)
         changed_fields.append("requirements[final+default]")
 
-    if not request.includeCode:
+    include_code = getattr(request, "includeCode", None)
+    if include_code is None:
+        include_code = getattr(request, "include_code", True)
+    if include_code is None:
+        include_code = True
+
+    if include_code is False:
+        normalized["codeFiles"] = []
         return
 
     files = normalized.get("codeFiles")
@@ -503,10 +510,22 @@ def _ensure_final_login_defense(
     for it in files:
         if not isinstance(it, dict):
             continue
-        bn = _basename_java_filename(str(it.get("fileName", "") or ""))
+        raw_fn = str(it.get("fileName", "") or "")
+        bn = _basename_java_filename(raw_fn)
         if not bn.endswith(".java"):
             continue
-        merged[bn] = dict(it)
+        if "/" in raw_fn or "\\" in raw_fn:
+            changed_fields.append("codeFiles[final-guard].fileName-basename")
+
+        fixed = dict(it)
+        content = fixed.get("content", "")
+        cs = content if isinstance(content, str) else _coerce_to_string(content)
+        pkg = _extract_java_package(cs) or _LOGIN_PKG_DEFAULT
+        fixed["fileName"] = bn
+        fixed["filePath"] = _java_file_path_for(pkg, bn)
+        fixed["language"] = "java"
+        fixed["content"] = cs
+        merged[bn] = fixed
 
     for req_fn in _LOGIN_REQUIRED_FILES:
         if req_fn not in merged:
@@ -524,7 +543,43 @@ def _ensure_final_login_defense(
     for k in sorted(merged.keys()):
         if k not in _LOGIN_REQUIRED_FILES:
             out_list.append(dict(merged[k]))
-    normalized["codeFiles"] = out_list
+
+    by_bn: dict[str, dict[str, Any]] = {}
+    for item in out_list:
+        d = dict(item)
+        bn2 = _basename_java_filename(str(d.get("fileName", "") or ""))
+        if not bn2.endswith(".java"):
+            continue
+        c2 = d.get("content", "")
+        c2s = c2 if isinstance(c2, str) else _coerce_to_string(c2)
+        pkg2 = _extract_java_package(c2s) or _LOGIN_PKG_DEFAULT
+        d["fileName"] = bn2
+        d["filePath"] = _java_file_path_for(pkg2, bn2)
+        d["language"] = "java"
+        d["content"] = c2s
+        by_bn[bn2] = d
+
+    for req_fn in _LOGIN_REQUIRED_FILES:
+        if req_fn not in by_bn:
+            by_bn[req_fn] = dict(canon[req_fn])
+            changed_fields.append(f"codeFiles[final2+].{req_fn}")
+
+    final_out: list[dict[str, Any]] = [dict(by_bn[r]) for r in _LOGIN_REQUIRED_FILES if r in by_bn]
+    for k in sorted(by_bn.keys()):
+        if k not in _LOGIN_REQUIRED_FILES:
+            final_out.append(dict(by_bn[k]))
+
+    for it in final_out:
+        fn = str(it.get("fileName", "") or "")
+        if "/" in fn or "\\" in fn:
+            it["fileName"] = _basename_java_filename(fn)
+            c3 = it.get("content", "")
+            c3s = c3 if isinstance(c3, str) else _coerce_to_string(c3)
+            pkg3 = _extract_java_package(c3s) or _LOGIN_PKG_DEFAULT
+            it["filePath"] = _java_file_path_for(pkg3, it["fileName"])
+            changed_fields.append("codeFiles[final3].fileName")
+
+    normalized["codeFiles"] = final_out
 
 
 def _normalize_login_spring_boot_codefiles(
