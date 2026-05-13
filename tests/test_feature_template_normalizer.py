@@ -1,5 +1,7 @@
 """FeatureTemplateNormalizer — 필수 섹션·별칭·타입 보정."""
 
+import json
+
 import pytest
 
 from app.models.enums import DifficultyLevel
@@ -53,17 +55,18 @@ def test_normalize_partial_overview_merged(sample_request: FeatureTemplateGenera
 
 
 def test_snake_case_aliases(sample_request: FeatureTemplateGenerateRequest) -> None:
+    req = sample_request.model_copy(update={"includeInterview": False})
     raw = {
         "api_spec": [{"apiName": "x", "method": "GET", "endpoint": "/", "description": "d", "requestBody": {}, "responseBody": {}, "status": 200}],
         "basic_questions": [],
         "interview": [],
         "next_recommendations": [],
     }
-    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    out = FeatureTemplateNormalizer.normalize(raw, req)
     assert out["apiSpec"][0]["apiName"] == "x"
     assert out["basicQuestions"] == []
     assert out["interviewQuestions"] == []
-    assert out["nextRecommendations"] == []
+    assert len(out["nextRecommendations"]) >= 3
 
 
 def test_code_view_files_unwrap(sample_request: FeatureTemplateGenerateRequest) -> None:
@@ -80,8 +83,11 @@ def test_code_view_files_unwrap(sample_request: FeatureTemplateGenerateRequest) 
         }
     }
     out = FeatureTemplateNormalizer.normalize(raw, sample_request)
-    assert len(out["codeFiles"]) == 1
-    assert out["codeFiles"][0]["fileName"] == "A.java"
+    assert len(out["codeFiles"]) >= 3
+    names = [f["fileName"] for f in out["codeFiles"]]
+    assert "A.java" in names
+    a = next(f for f in out["codeFiles"] if f["fileName"] == "A.java")
+    assert a["content"] == "// ok"
 
 
 def test_include_flags_force_empty_sections(sample_request: FeatureTemplateGenerateRequest) -> None:
@@ -226,6 +232,116 @@ def test_missions_difficulty_uses_request_level_when_missing() -> None:
     }
     out = FeatureTemplateNormalizer.normalize(raw, req)
     assert out["missions"][0]["difficulty"] == "advanced"
+    FeatureTemplateData(**out)
+
+
+_PLACEHOLDER_SUBSTRINGS = (
+    "실제 동작 가능한 코드 문자열",
+    "...",
+    "TODO",
+    "예시 코드",
+    "생략",
+    "placeholder",
+    "플레이스홀더",
+)
+
+
+def _assert_no_placeholder_substrings(blob: object) -> None:
+    dumped = json.dumps(blob, ensure_ascii=False)
+    for marker in _PLACEHOLDER_SUBSTRINGS:
+        assert marker not in dumped
+
+
+def test_codefiles_placeholder_content_replaced_with_java(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "codeFiles": [
+            {
+                "fileName": "X.java",
+                "role": "r",
+                "language": "java",
+                "content": "실제 동작 가능한 코드 문자열",
+            }
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert "실제 동작 가능한 코드 문자열" not in out["codeFiles"][0]["content"]
+    assert "@RestController" in out["codeFiles"][0]["content"] or "package com.example.auth" in out["codeFiles"][0][
+        "content"
+    ]
+    FeatureTemplateData(**out)
+
+
+def test_interview_placeholder_ellipsis_replaced(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "interviewQuestions": [
+            {
+                "questionId": "q1",
+                "question": "...",
+                "keyPoints": ["..."],
+                "sampleAnswer": "...",
+            }
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert "..." not in out["interviewQuestions"][0]["question"]
+    assert out["interviewQuestions"][0]["keyPoints"]
+    FeatureTemplateData(**out)
+
+
+def test_next_recommendations_padded_when_short(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {"nextRecommendations": []}
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert len(out["nextRecommendations"]) >= 3
+    names = {x["featureName"] for x in out["nextRecommendations"]}
+    assert "회원가입" in names or "JWT 인증" in names or "권한 관리" in names
+    FeatureTemplateData(**out)
+
+
+def test_codefiles_single_entry_padded_to_at_least_three(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "codeFiles": [
+            {
+                "fileName": "Only.java",
+                "role": "main",
+                "language": "java",
+                "content": "class Only { }",
+            }
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert len(out["codeFiles"]) >= 3
+    FeatureTemplateData(**out)
+
+
+def test_normalized_payload_has_no_placeholder_substrings(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "codeFiles": [
+            {
+                "fileName": "Bad.java",
+                "role": "r",
+                "language": "java",
+                "content": "실제 동작 가능한 코드 문자열",
+            }
+        ],
+        "interviewQuestions": [
+            {
+                "questionId": "q1",
+                "question": "TODO 질문",
+                "keyPoints": ["예시 코드"],
+                "sampleAnswer": "생략",
+            }
+        ],
+        "nextRecommendations": [],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    _assert_no_placeholder_substrings(
+        {
+            "codeFiles": out["codeFiles"],
+            "interviewQuestions": out["interviewQuestions"],
+            "nextRecommendations": out["nextRecommendations"],
+        }
+    )
+    assert "source" not in out
     FeatureTemplateData(**out)
 
 

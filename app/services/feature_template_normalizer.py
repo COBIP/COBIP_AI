@@ -186,6 +186,502 @@ def _default_mission_difficulty(request: FeatureTemplateGenerateRequest | None) 
     return DifficultyLevel.BEGINNER.value
 
 
+def _contains_placeholder(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    if "실제 동작 가능한 코드 문자열" in text:
+        return True
+    if "..." in text:
+        return True
+    if "TODO" in text:
+        return True
+    if "예시 코드" in text:
+        return True
+    if "생략" in text:
+        return True
+    if "placeholder" in low:
+        return True
+    if "플레이스홀더" in text:
+        return True
+    return False
+
+
+def _interview_item_has_placeholder(item: dict[str, Any]) -> bool:
+    q = item.get("question")
+    if isinstance(q, str) and _contains_placeholder(q):
+        return True
+    sa = item.get("sampleAnswer")
+    if isinstance(sa, str) and _contains_placeholder(sa):
+        return True
+    kps = item.get("keyPoints")
+    if isinstance(kps, list):
+        for kp in kps:
+            if isinstance(kp, str) and _contains_placeholder(kp):
+                return True
+    return False
+
+
+def _java_class_prefix(request: FeatureTemplateGenerateRequest | None) -> str:
+    if request is None:
+        return "Login"
+    fn = (request.featureName or "").strip()
+    if fn in ("로그인", "login", "Login"):
+        return "Login"
+    safe = re.sub(r"[^0-9a-zA-Z_]+", "", fn.replace(" ", ""))
+    if safe and safe[0].isalpha():
+        return safe[0].upper() + safe[1:]
+    return "App"
+
+
+def _is_java_spring(request: FeatureTemplateGenerateRequest | None) -> bool:
+    if request is None:
+        return False
+    if request.language.lower() != "java":
+        return False
+    fw = (request.framework or "").lower().replace("_", "-")
+    return "spring" in fw
+
+
+def _java_spring_code_templates(prefix: str) -> list[dict[str, Any]]:
+    p = prefix
+    lc = f"{p}Controller"
+    ls = f"{p}Service"
+    lr = f"{p}Request"
+    lresp = f"{p}Response"
+    return [
+        {
+            "fileName": f"{lc}.java",
+            "role": "REST API 엔드포인트",
+            "language": "java",
+            "content": f"""package com.example.auth;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/auth")
+public class {lc} {{
+
+    private final {ls} authService;
+
+    public {lc}({ls} authService) {{
+        this.authService = authService;
+    }}
+
+    @PostMapping("/login")
+    public ResponseEntity<{lresp}> login(@RequestBody {lr} body) {{
+        {lresp} result = authService.login(body.username(), body.password());
+        return ResponseEntity.ok(result);
+    }}
+}}
+""",
+        },
+        {
+            "fileName": f"{ls}.java",
+            "role": "비즈니스 로직",
+            "language": "java",
+            "content": f"""package com.example.auth;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class {ls} {{
+
+    private final UserRepository userRepository;
+
+    public {ls}(UserRepository userRepository) {{
+        this.userRepository = userRepository;
+    }}
+
+    public {lresp} login(String username, String password) {{
+        var user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("사용자 없음"));
+        if (!user.matchesPassword(password)) {{
+            throw new IllegalArgumentException("비밀번호 불일치");
+        }}
+        return new {lresp}(user.getId(), user.getUsername(), "로그인 성공");
+    }}
+}}
+""",
+        },
+        {
+            "fileName": f"{lr}.java",
+            "role": "요청 DTO",
+            "language": "java",
+            "content": f"""package com.example.auth;
+
+public record {lr}(String username, String password) {{
+}}
+""",
+        },
+        {
+            "fileName": f"{lresp}.java",
+            "role": "응답 DTO",
+            "language": "java",
+            "content": f"""package com.example.auth;
+
+public record {lresp}(Long userId, String username, String message) {{
+}}
+""",
+        },
+        {
+            "fileName": "UserEntity.java",
+            "role": "영속 엔티티",
+            "language": "java",
+            "content": """package com.example.auth;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
+@Entity
+@Table(name = "users")
+public class UserEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String username;
+
+    @Column(nullable = false)
+    private String passwordHash;
+
+    protected UserEntity() {
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public boolean matchesPassword(String rawPassword) {
+        return passwordHash != null && rawPassword != null && passwordHash.equals(rawPassword);
+    }
+}
+""",
+        },
+        {
+            "fileName": "UserRepository.java",
+            "role": "데이터 접근",
+            "language": "java",
+            "content": """package com.example.auth;
+
+import java.util.Optional;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface UserRepository extends JpaRepository<UserEntity, Long> {
+    Optional<UserEntity> findByUsername(String username);
+}
+""",
+        },
+    ]
+
+
+def _default_interview_templates() -> list[dict[str, Any]]:
+    return [
+        {
+            "questionId": "IQ-norm-1",
+            "question": (
+                "클라이언트가 로그인 요청을 보낸 뒤 서버에서 인증이 완료되기까지의 "
+                "HTTP 흐름과 주요 검증 단계를 순서대로 설명하시오."
+            ),
+            "keyPoints": [
+                "요청 본문에서 자격 증명 수신",
+                "사용자 조회 및 비밀번호 검증",
+                "성공 시 세션 또는 토큰 발급",
+                "실패 시 상태 코드와 메시지 정책",
+            ],
+            "sampleAnswer": (
+                "클라이언트는 보통 POST로 사용자명과 비밀번호를 전송한다. "
+                "서버는 저장소에서 사용자를 찾고, 저장된 해시와 입력 비밀번호를 "
+                "BCrypt 등으로 비교한다. 일치하면 인증 성공으로 간주하고 "
+                "세션 쿠키나 JWT access 토큰을 응답에 실어 보낸다. "
+                "실패하면 401과 함께 동일한 형태의 오류 본문으로 정보 유출을 줄인다."
+            ),
+            "relatedSection": "flow",
+        },
+        {
+            "questionId": "IQ-norm-2",
+            "question": (
+                "동일한 로그인 유스케이스에서 Controller, Service, Repository 계층을 "
+                "나눈 이유와 각 계층의 책임 경계를 설명하시오."
+            ),
+            "keyPoints": [
+                "Controller는 HTTP 변환과 입력 검증",
+                "Service는 유스케이스와 트랜잭션 경계",
+                "Repository는 영속화 쿼리 캡슐화",
+                "계층 간 순환 의존 방지",
+            ],
+            "sampleAnswer": (
+                "Controller는 요청과 응답 매핑, 상태 코드 결정, 입력 형식 검증에 집중한다. "
+                "Service는 비즈니스 규칙, 사용자 조회, 비밀번호 검증, 예외를 도메인 예외로 "
+                "바꾸는 역할을 맡긴다. Repository는 엔티티 로딩과 쿼리를 숨겨 "
+                "Service가 영속성 세부사항을 몰라도 되게 한다. 이렇게 나누면 "
+                "테스트와 변경 영향 범위를 줄일 수 있다."
+            ),
+            "relatedSection": "codeFiles",
+        },
+        {
+            "questionId": "IQ-norm-3",
+            "question": (
+                "로그인 시 비밀번호를 평문으로 저장하지 않고 BCrypt 같은 해시를 "
+                "사용하는 이유와 운영 시 주의할 점을 설명하시오."
+            ),
+            "keyPoints": [
+                "DB 유출 시에도 원문 비밀번호 복구가 어렵도록 단방향 해시",
+                "솔트와 work factor로 무차별 대입 비용 증가",
+                "로그와 예외 메시지에 비밀번호 노출 금지",
+                "전송 구간은 TLS로 보호",
+            ],
+            "sampleAnswer": (
+                "BCrypt는 단방향 해시와 솔트를 결합해 레인보우 테이블 공격을 어렵게 한다. "
+                "work factor를 올려 연산 비용을 조절할 수 있다. 운영에서는 "
+                "절대 평문을 로그에 남기지 않고, 검증 실패 시에도 "
+                "사용자 존재 여부를 노출하지 않도록 메시지를 통일하는 것이 중요하다."
+            ),
+            "relatedSection": "requirements",
+        },
+    ]
+
+
+def _default_next_recommendation_rows() -> list[tuple[str, str, str]]:
+    return [
+        (
+            "회원가입",
+            "로그인과 짝을 이루는 사용자 생성 흐름으로 비밀번호 해시와 중복 검증을 익힌다.",
+            "엔티티 설계, BCrypt 저장, username 중복 검사, 검증 오류 응답 형식 통일.",
+        ),
+        (
+            "JWT 인증",
+            "세션 기반에서 벗어나 토큰 기반 무상태 인증 패턴을 확장 학습한다.",
+            "액세스 토큰 발급, 서명 검증, 만료와 리프레시 정책, 클레임 설계.",
+        ),
+        (
+            "권한 관리",
+            "인증된 사용자에 대해 역할과 권한으로 API 접근을 제한하는 방법을 학습한다.",
+            "Role 모델링, 인가 필터 또는 인터셉터, 보호 URL 정책과 테스트 전략.",
+        ),
+    ]
+
+
+def _pad_mission_dicts(
+    existing: list[dict[str, Any]],
+    request: FeatureTemplateGenerateRequest | None,
+    need: int,
+) -> list[dict[str, Any]]:
+    out = list(existing)
+    diff = _default_mission_difficulty(request)
+    n = len(out)
+    idx = 0
+    while len(out) < need:
+        idx += 1
+        mid = n + idx
+        out.append(
+            {
+                "missionId": f"auto-mission-{mid}",
+                "title": f"구현 미션 {idx}",
+                "description": (
+                    "미션 목표: 요구사항에 맞는 핵심 로직과 예외 경로를 구현하고 "
+                    "단위 검증으로 동작을 확인한다."
+                ),
+                "missionType": "implementation",
+                "requirements": list(_DEFAULT_MISSION_REQUIREMENTS),
+                "successCriteria": list(_DEFAULT_MISSION_SUCCESS),
+                "relatedRequirements": [],
+                "difficulty": diff,
+            }
+        )
+    return out
+
+
+def _apply_post_normalize_quality(
+    normalized: dict[str, Any],
+    request: FeatureTemplateGenerateRequest | None,
+    changed_fields: list[str],
+) -> None:
+    """placeholder 제거, 최소 개수 보장(include 플래그 존중)."""
+    inc_code = request is None or request.includeCode
+    inc_miss = request is None or request.includeMissions
+    inc_iv = request is None or request.includeInterview
+
+    if inc_code:
+        files = normalized.get("codeFiles")
+        if isinstance(files, list):
+            prefix = _java_class_prefix(request)
+            use_java = request is None or request.language.lower() == "java"
+            templates = _java_spring_code_templates(prefix) if use_java else []
+            by_name = {str(t["fileName"]): t for t in templates}
+            seen: set[str] = set()
+            new_list: list[dict[str, Any]] = []
+            for index, raw_item in enumerate(files):
+                if not isinstance(raw_item, dict):
+                    continue
+                item = dict(raw_item)
+                fn = str(item.get("fileName", "") or f"file-{index}.java")
+                seen.add(fn)
+                content = item.get("content", "")
+                cstr = content if isinstance(content, str) else _coerce_to_string(content)
+                if _contains_placeholder(cstr):
+                    tpl = by_name.get(fn) if by_name else None
+                    if tpl is None and templates:
+                        tpl = templates[0]
+                    if tpl is not None:
+                        item["content"] = tpl["content"]
+                        if use_java and _is_java_spring(request) and fn not in by_name:
+                            item["fileName"] = tpl["fileName"]
+                            item["role"] = tpl["role"]
+                            item["language"] = "java"
+                    else:
+                        lang = (
+                            (request.language or "python").lower()
+                            if request is not None
+                            else "python"
+                        )
+                        item["content"] = (
+                            f"# {fn}\n"
+                            "def run() -> None:\n"
+                            "    return None\n"
+                        )
+                        item["language"] = lang
+                    changed_fields.append(f"codeFiles[{index}].content")
+                elif not isinstance(item.get("content"), str):
+                    item["content"] = cstr
+                new_list.append(item)
+            if len(new_list) < 3:
+                if templates:
+                    for tpl in templates:
+                        if len(new_list) >= 3:
+                            break
+                        if tpl["fileName"] not in seen:
+                            new_list.append(dict(tpl))
+                            seen.add(str(tpl["fileName"]))
+                            changed_fields.append(f"codeFiles[+].{tpl['fileName']}")
+                else:
+                    pad_i = len(new_list)
+                    while len(new_list) < 3:
+                        new_list.append(
+                            {
+                                "fileName": f"module_{pad_i}.py",
+                                "role": "supporting module",
+                                "language": (request.language if request else "python").lower(),
+                                "content": (
+                                    f"# module {pad_i}\n"
+                                    f"def step_{pad_i}() -> int:\n"
+                                    f"    return {pad_i}\n"
+                                ),
+                            }
+                        )
+                        pad_i += 1
+                        changed_fields.append(f"codeFiles[+].module_{pad_i - 1}.py")
+            normalized["codeFiles"] = new_list
+
+    if inc_miss:
+        missions = normalized.get("missions")
+        if isinstance(missions, list):
+            mlist = [dict(x) for x in missions if isinstance(x, dict)]
+            if len(mlist) < 2:
+                normalized["missions"] = _pad_mission_dicts(mlist, request, 2)
+                changed_fields.append("missions[+pad]")
+
+    if inc_iv:
+        iv = normalized.get("interviewQuestions")
+        if isinstance(iv, list):
+            iv_list: list[dict[str, Any]] = []
+            templates_iv = _default_interview_templates()
+            for index, raw_item in enumerate(iv):
+                if not isinstance(raw_item, dict):
+                    continue
+                item = dict(raw_item)
+                if _interview_item_has_placeholder(item):
+                    tpl = templates_iv[min(index, len(templates_iv) - 1)]
+                    item.update(
+                        {
+                            "questionId": tpl["questionId"],
+                            "question": tpl["question"],
+                            "keyPoints": list(tpl["keyPoints"]),
+                            "sampleAnswer": tpl["sampleAnswer"],
+                            "relatedSection": tpl["relatedSection"],
+                        }
+                    )
+                    changed_fields.append(f"interviewQuestions[{index}]")
+                iv_list.append(item)
+            t_idx = 0
+            while len(iv_list) < 3:
+                tpl = templates_iv[t_idx % len(templates_iv)]
+                t_idx += 1
+                dup = dict(tpl)
+                dup["questionId"] = f"{tpl['questionId']}-pad-{t_idx}"
+                iv_list.append(dup)
+                changed_fields.append("interviewQuestions[+pad]")
+            normalized["interviewQuestions"] = iv_list
+
+    nxt = normalized.get("nextRecommendations")
+    if not isinstance(nxt, list):
+        nxt = []
+    rows = _default_next_recommendation_rows()
+    out_next: list[dict[str, Any]] = []
+    for idx, raw_item in enumerate(nxt):
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        fn0 = _coerce_to_string(item.get("featureName", "")).strip()
+        rs0 = _coerce_to_string(item.get("reason", "")).strip()
+        el0 = _coerce_to_string(item.get("expectedLearning", "")).strip()
+        row = rows[min(idx, len(rows) - 1)]
+        if not fn0 or _contains_placeholder(fn0):
+            item["featureName"] = row[0]
+            changed_fields.append(f"nextRecommendations[{idx}].featureName")
+        else:
+            item["featureName"] = fn0
+        if not rs0 or _contains_placeholder(rs0):
+            item["reason"] = row[1]
+            changed_fields.append(f"nextRecommendations[{idx}].reason")
+        else:
+            item["reason"] = rs0
+        if not el0 or _contains_placeholder(el0):
+            item["expectedLearning"] = row[2]
+            changed_fields.append(f"nextRecommendations[{idx}].expectedLearning")
+        else:
+            item["expectedLearning"] = el0
+        pr = item.get("priority", idx + 1)
+        try:
+            item["priority"] = int(pr)
+        except (TypeError, ValueError):
+            item["priority"] = idx + 1
+        out_next.append(item)
+
+    pri = max((int(x.get("priority", 0)) for x in out_next), default=0) + 1
+    r = 0
+    while len(out_next) < 3:
+        name, reason, learn = rows[r % len(rows)]
+        r += 1
+        if any(str(x.get("featureName")) == name for x in out_next):
+            continue
+        out_next.append(
+            {
+                "featureName": name,
+                "reason": reason,
+                "expectedLearning": learn,
+                "priority": pri,
+            }
+        )
+        pri += 1
+        changed_fields.append("nextRecommendations[+pad]")
+    normalized["nextRecommendations"] = out_next
+
+
 def normalize_feature_template_payload(
     payload: dict,
     request: FeatureTemplateGenerateRequest | None = None,
@@ -413,6 +909,8 @@ def normalize_feature_template_payload(
             normalized_items.append(normalized_item)
         normalized[section] = normalized_items
 
+    _apply_post_normalize_quality(normalized, request, changed_fields)
+
     if changed_fields:
         logger.info(
             "Feature template LLM payload normalized: fields=%s",
@@ -534,4 +1032,5 @@ class FeatureTemplateNormalizer:
             "interviewQuestions": interview_questions,
             "nextRecommendations": next_recommendations,
         }
-        return normalize_feature_template_payload(merged, request)
+        once = normalize_feature_template_payload(merged, request)
+        return normalize_feature_template_payload(dict(once), request)

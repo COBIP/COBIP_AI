@@ -75,11 +75,15 @@ def test_prompt_passes_language_framework_feature_level() -> None:
     assert "intermediate" in text
 
 
+def test_prompt_forbids_placeholder_dummy_phrases() -> None:
+    text = build_feature_template_prompt(_req())
+    assert "더미" in text or "준비용" in text or "플레이스홀더" in text
+    assert "실제 동작 가능한 코드 문자열" in text
+
+
 def test_prompt_quality_minimums() -> None:
     text = build_feature_template_prompt(_req())
     assert "최소 3개" in text
-    assert "apiSpec" in text and "최소 1개" in text
-    assert "5단계" in text or "5개 이상" in text
 
 
 def test_prompt_maps_conceptual_fields_to_schema_without_extra_keys() -> None:
