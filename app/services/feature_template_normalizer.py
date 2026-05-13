@@ -127,13 +127,37 @@ def _normalize_string_list_field(
     return normalized_item
 
 
-def normalize_feature_template_payload(payload: dict) -> dict:
+def _default_requirement_related_screen_or_api(
+    request: FeatureTemplateGenerateRequest | None,
+) -> str:
+    if request is None:
+        return "관련 화면 / API"
+    name = (request.featureName or "").strip()
+    if not name:
+        return "관련 화면 / API"
+    return f"{name} 화면 / {name} API"
+
+
+def _is_missing_or_blank_str(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def normalize_feature_template_payload(
+    payload: dict,
+    request: FeatureTemplateGenerateRequest | None = None,
+) -> dict:
     """LLM 응답에서 자주 흔들리는 타입만 Pydantic 검증 전에 보정한다."""
     if not isinstance(payload, dict):
         return payload
 
     normalized = dict(payload)
     changed_fields: list[str] = []
+
+    default_related = _default_requirement_related_screen_or_api(request)
 
     requirements = normalized.get("requirements")
     if isinstance(requirements, list):
@@ -164,6 +188,13 @@ def normalize_feature_template_payload(payload: dict) -> dict:
             elif priority is not None and not isinstance(priority, str):
                 normalized_item["priority"] = str(priority)
                 changed_fields.append(f"requirements[{index}].priority")
+            if _is_missing_or_blank_str(normalized_item.get("priority")):
+                normalized_item["priority"] = "MEDIUM"
+                changed_fields.append(f"requirements[{index}].priority")
+            related = normalized_item.get("relatedScreenOrApi")
+            if _is_missing_or_blank_str(related):
+                normalized_item["relatedScreenOrApi"] = default_related
+                changed_fields.append(f"requirements[{index}].relatedScreenOrApi")
             normalized_requirements.append(normalized_item)
         normalized["requirements"] = normalized_requirements
 
@@ -411,4 +442,4 @@ class FeatureTemplateNormalizer:
             "interviewQuestions": interview_questions,
             "nextRecommendations": next_recommendations,
         }
-        return normalize_feature_template_payload(merged)
+        return normalize_feature_template_payload(merged, request)

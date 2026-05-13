@@ -121,3 +121,47 @@ def test_pydantic_round_trip_after_normalize(sample_request: FeatureTemplateGene
     template = FeatureTemplateData(**out)
     dumped = template.model_dump()
     assert set(dumped.keys()) == _CANONICAL_KEYS
+
+
+def test_requirements_missing_priority_and_related_get_defaults(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "requirements": [
+            {
+                "requirementId": "r1",
+                "name": "요구1",
+                "description": "설명",
+                "inputValue": "입력",
+                "processCondition": "조건",
+                "successResult": "성공",
+                "failureResult": "실패",
+            }
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert out["requirements"][0]["priority"] == "MEDIUM"
+    assert out["requirements"][0]["relatedScreenOrApi"] == "로그인 화면 / 로그인 API"
+    template = FeatureTemplateData(**out)
+    assert template.requirements[0].priority == "MEDIUM"
+    assert template.requirements[0].relatedScreenOrApi == "로그인 화면 / 로그인 API"
+
+
+def test_requirements_defaults_without_request_use_generic_related() -> None:
+    raw = {
+        "requirements": [
+            {
+                "requirementId": "r1",
+                "name": "요구1",
+                "description": "설명",
+                "inputValue": "입력",
+                "processCondition": "조건",
+                "successResult": "성공",
+                "failureResult": "실패",
+            }
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, None)
+    assert out["requirements"][0]["priority"] == "MEDIUM"
+    assert out["requirements"][0]["relatedScreenOrApi"] == "관련 화면 / API"
+    FeatureTemplateData(**out)
