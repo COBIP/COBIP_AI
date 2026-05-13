@@ -336,9 +336,15 @@ def _login_request_content_valid(content: str) -> bool:
 def _login_response_content_valid(content: str) -> bool:
     if _contains_placeholder(content):
         return False
-    return ("record LoginResponse" in content or "class LoginResponse" in content) and (
-        "accessToken" in content and "tokenType" in content and "username" in content
+    has_type = "record LoginResponse" in content or "class LoginResponse" in content
+    low = content.lower()
+    has_field = (
+        "accesstoken" in low
+        or re.search(r"\btoken\b", low)
+        or re.search(r"\buser\b", low)
+        or "username" in low
     )
+    return has_type and has_field
 
 
 def _canonical_login_spring_four() -> dict[str, dict[str, Any]]:
@@ -429,6 +435,96 @@ public record LoginResponse(String accessToken, String tokenType, String usernam
 """,
         },
     }
+
+
+def _default_login_requirements(
+    request: FeatureTemplateGenerateRequest | None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "requirementId": "R-001",
+            "name": "로그인 요청 입력값 검증",
+            "description": "사용자는 username과 password를 입력해 로그인 요청을 보낼 수 있어야 한다.",
+            "inputValue": "username, password",
+            "processCondition": "username/password는 비어 있으면 안 된다.",
+            "successResult": "유효한 입력이면 인증 처리로 진행한다.",
+            "failureResult": "입력값이 누락되면 400 응답을 반환한다.",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "POST /api/auth/login",
+        },
+        {
+            "requirementId": "R-002",
+            "name": "사용자 인증 처리",
+            "description": "서버는 입력받은 username으로 사용자를 조회하고 비밀번호를 검증한다.",
+            "inputValue": "username, password",
+            "processCondition": "사용자 존재 여부와 비밀번호 일치 여부를 확인한다.",
+            "successResult": "인증 성공 시 토큰 발급 단계로 진행한다.",
+            "failureResult": "인증 실패 시 401 응답을 반환한다.",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "LoginService.login",
+        },
+        {
+            "requirementId": "R-003",
+            "name": "로그인 성공 응답",
+            "description": "로그인 성공 시 accessToken, tokenType, username을 반환한다.",
+            "inputValue": "인증된 사용자 정보",
+            "processCondition": "인증이 성공해야 한다.",
+            "successResult": "200 OK와 로그인 응답 DTO를 반환한다.",
+            "failureResult": "인증 실패 시 성공 응답을 반환하지 않는다.",
+            "priority": "MEDIUM",
+            "relatedScreenOrApi": "LoginResponse",
+        },
+    ]
+
+
+def _ensure_final_login_defense(
+    normalized: dict[str, Any],
+    request: FeatureTemplateGenerateRequest | None,
+    changed_fields: list[str],
+) -> None:
+    """로그인+Spring 최종 반환 직전: codeFiles 4종·requirements 최소 보장."""
+    if request is None or not _is_java_spring(request) or not _is_login_feature_request(request):
+        return
+
+    req_list = normalized.get("requirements")
+    if not isinstance(req_list, list) or len(req_list) == 0:
+        normalized["requirements"] = _default_login_requirements(request)
+        changed_fields.append("requirements[final+default]")
+
+    if not request.includeCode:
+        return
+
+    files = normalized.get("codeFiles")
+    if not isinstance(files, list):
+        return
+
+    canon = _canonical_login_spring_four()
+    merged: dict[str, dict[str, Any]] = {}
+    for it in files:
+        if not isinstance(it, dict):
+            continue
+        bn = _basename_java_filename(str(it.get("fileName", "") or ""))
+        if not bn.endswith(".java"):
+            continue
+        merged[bn] = dict(it)
+
+    for req_fn in _LOGIN_REQUIRED_FILES:
+        if req_fn not in merged:
+            merged[req_fn] = dict(canon[req_fn])
+            changed_fields.append(f"codeFiles[final+].{req_fn}")
+            continue
+        if req_fn == "LoginResponse.java":
+            c = merged[req_fn].get("content", "")
+            cs = c if isinstance(c, str) else _coerce_to_string(c)
+            if not _login_response_content_valid(cs):
+                merged[req_fn] = dict(canon[req_fn])
+                changed_fields.append("codeFiles[final~].LoginResponse.java")
+
+    out_list: list[dict[str, Any]] = [dict(merged[r]) for r in _LOGIN_REQUIRED_FILES if r in merged]
+    for k in sorted(merged.keys()):
+        if k not in _LOGIN_REQUIRED_FILES:
+            out_list.append(dict(merged[k]))
+    normalized["codeFiles"] = out_list
 
 
 def _normalize_login_spring_boot_codefiles(
@@ -1257,6 +1353,7 @@ def normalize_feature_template_payload(
         normalized[section] = normalized_items
 
     _apply_post_normalize_quality(normalized, request, changed_fields)
+    _ensure_final_login_defense(normalized, request, changed_fields)
 
     if changed_fields:
         logger.info(
