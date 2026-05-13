@@ -111,12 +111,13 @@ def test_include_flags_force_empty_sections(sample_request: FeatureTemplateGener
 
 
 def test_weird_types_do_not_raise(sample_request: FeatureTemplateGenerateRequest) -> None:
+    req = sample_request.model_copy(update={"framework": None, "featureName": "다른기능"})
     raw = {
         "requirements": "not-a-list",
         "flow": "not-a-dict",
         "apiSpec": None,
     }
-    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    out = FeatureTemplateNormalizer.normalize(raw, req)
     template = FeatureTemplateData(**out)
     assert template.requirements == []
     assert template.flow.steps == []
@@ -513,5 +514,52 @@ def test_login_codefiles_no_placeholders_and_no_source_key(sample_request: Featu
         "플레이스홀더",
     ):
         assert marker not in dumped
+    assert "source" not in out
+    FeatureTemplateData(**out)
+
+
+def test_final_defense_adds_login_response_when_only_three_core_files(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    from app.services import feature_template_normalizer as ft_norm
+
+    canon = ft_norm._canonical_login_spring_four()
+    raw = {
+        "codeFiles": [
+            dict(canon["LoginController.java"]),
+            dict(canon["LoginService.java"]),
+            dict(canon["LoginRequest.java"]),
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    names = [f["fileName"] for f in out["codeFiles"]]
+    assert "LoginResponse.java" in names
+    FeatureTemplateData(**out)
+
+
+def test_final_defense_fills_empty_requirements_for_login(sample_request: FeatureTemplateGenerateRequest) -> None:
+    out = FeatureTemplateNormalizer.normalize({"requirements": []}, sample_request)
+    assert len(out["requirements"]) >= 3
+    for r in out["requirements"]:
+        assert r.get("priority")
+        assert r.get("relatedScreenOrApi")
+    FeatureTemplateData(**out)
+
+
+def test_final_defense_default_requirement_ids(sample_request: FeatureTemplateGenerateRequest) -> None:
+    out = FeatureTemplateNormalizer.normalize({"requirements": []}, sample_request)
+    ids = [r["requirementId"] for r in out["requirements"]]
+    assert "R-001" in ids and "R-002" in ids and "R-003" in ids
+    FeatureTemplateData(**out)
+
+
+def test_final_defense_does_not_add_source_key(sample_request: FeatureTemplateGenerateRequest) -> None:
+    out = FeatureTemplateNormalizer.normalize(
+        {
+            "requirements": [],
+            "codeFiles": [],
+        },
+        sample_request,
+    )
     assert "source" not in out
     FeatureTemplateData(**out)
