@@ -1,0 +1,54 @@
+name: CD
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy FastAPI AI Server to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          port: ${{ secrets.AWS_SSH_PORT }}
+          script: |
+            set -e
+
+            echo "===== Move to project directory ====="
+            cd ${{ secrets.AWS_PROJECT_PATH }}
+
+            echo "===== Pull latest develop branch ====="
+            git fetch origin
+            git checkout develop
+            git pull origin develop
+
+            echo "===== Build Docker image ====="
+            docker build -t cobip-ai-server .
+
+            echo "===== Stop old FastAPI container if exists ====="
+            docker stop cobip-ai-server-run || true
+            docker rm cobip-ai-server-run || true
+
+            echo "===== Start Redis and Qdrant if exists ====="
+            docker start cobip_ai-redis-1 || true
+            docker start qdrant || true
+
+            echo "===== Run new FastAPI container ====="
+            docker run -d \
+              --name cobip-ai-server-run \
+              -p 8000:8000 \
+              cobip-ai-server
+
+            echo "===== Check running containers ====="
+            docker ps
+
+            echo "===== Check FastAPI docs ====="
+            curl -I http://localhost:8000/docs
