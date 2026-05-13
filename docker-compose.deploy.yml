@@ -1,6 +1,10 @@
 # EC2 배포용: ai-server는 ECR 이미지, Redis/Qdrant/Ollama는 공식 이미지.
 # COBIP_AI_IMAGE, COBIP_HOST_PORT 는 배포 스크립트에서 export 한 뒤 docker compose 실행.
 
+networks:
+  cobip:
+    driver: bridge
+
 services:
   ai-server:
     image: ${COBIP_AI_IMAGE:?set COBIP_AI_IMAGE to ECR image URI}
@@ -19,6 +23,8 @@ services:
       - ollama
       - qdrant
       - redis
+    networks:
+      - cobip
 
   ollama:
     image: ollama/ollama
@@ -26,6 +32,8 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    networks:
+      - cobip
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -34,11 +42,15 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_storage:/qdrant/storage
+    networks:
+      - cobip
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    networks:
+      - cobip
 
 volumes:
   ollama_data:
