@@ -35,6 +35,7 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - flow.steps 의 각 항목은 반드시 문자열이다. 객체를 넣지 않는다.
 - missions[].missionType 은 반드시 문자열이다. 예: "implementation", "extension", "validation"
 - 숫자 필드를 제외하고 문자열 필드는 반드시 문자열로 반환한다.
+- codeFiles.content, interviewQuestions, nextRecommendations 값에는 점 세 개 연속, 생략, TODO, 예시 코드, 플레이스홀더, "실제 동작 가능한 코드 문자열" 같은 더미·준비용 문구를 절대 넣지 않는다.
 
 [includeCode / includeMissions / includeInterview — user 프롬프트 값을 그대로 따른다]
 - includeCode 가 false 이면 codeFiles 는 반드시 빈 배열 [] 이다 (key 는 존재).
