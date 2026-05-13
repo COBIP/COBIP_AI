@@ -243,6 +243,343 @@ def _is_java_spring(request: FeatureTemplateGenerateRequest | None) -> bool:
     return "spring" in fw
 
 
+def _is_login_feature_request(request: FeatureTemplateGenerateRequest | None) -> bool:
+    if request is None:
+        return False
+    fn = (request.featureName or "").strip()
+    return fn in ("로그인", "login", "Login")
+
+
+_LOGIN_PKG_DEFAULT = "com.example.auth"
+_LOGIN_REQUIRED_FILES: tuple[str, ...] = (
+    "LoginController.java",
+    "LoginService.java",
+    "LoginRequest.java",
+    "LoginResponse.java",
+)
+
+
+def _basename_java_filename(name: str) -> str:
+    s = (name or "").strip().replace("\\", "/")
+    if "/" in s:
+        s = s.rsplit("/", 1)[-1]
+    if not s:
+        return "Unknown.java"
+    if not s.endswith(".java"):
+        s = f"{s}.java"
+    return s
+
+
+def _extract_java_package(content: str) -> str | None:
+    m = re.search(r"^\s*package\s+([\w.]+)\s*;", content, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _java_file_path_for(package: str, basename: str) -> str:
+    rel = package.replace(".", "/") + "/" + basename
+    return f"src/main/java/{rel}"
+
+
+def _java_declares_type(content: str, type_name: str) -> bool:
+    return bool(
+        re.search(
+            rf"\b(?:class|record|interface)\s+{re.escape(type_name)}\b",
+            content,
+        )
+    )
+
+
+def _is_controller_like_java(content: str) -> bool:
+    return "@RestController" in content or "@Controller" in content
+
+
+def _login_controller_content_valid(content: str) -> bool:
+    if _contains_placeholder(content):
+        return False
+    path_ok = "/api/auth" in content
+    return (
+        "class LoginController" in content
+        and "@RestController" in content
+        and path_ok
+        and "@PostMapping" in content
+        and "/login" in content
+        and "LoginService" in content
+        and "LoginRequest" in content
+        and "LoginResponse" in content
+    )
+
+
+def _login_service_content_valid(content: str) -> bool:
+    if _contains_placeholder(content):
+        return False
+    if _is_controller_like_java(content):
+        return False
+    if "@RequestMapping" in content or "@PostMapping" in content or "@GetMapping" in content:
+        return False
+    return (
+        "class LoginService" in content
+        and "@Service" in content
+        and "LoginResponse" in content
+        and "login" in content
+        and "LoginRequest" in content
+    )
+
+
+def _login_request_content_valid(content: str) -> bool:
+    if _contains_placeholder(content):
+        return False
+    return ("record LoginRequest" in content or "class LoginRequest" in content) and (
+        "username" in content and "password" in content
+    )
+
+
+def _login_response_content_valid(content: str) -> bool:
+    if _contains_placeholder(content):
+        return False
+    return ("record LoginResponse" in content or "class LoginResponse" in content) and (
+        "accessToken" in content and "tokenType" in content and "username" in content
+    )
+
+
+def _canonical_login_spring_four() -> dict[str, dict[str, Any]]:
+    pkg = _LOGIN_PKG_DEFAULT
+    return {
+        "LoginController.java": {
+            "fileName": "LoginController.java",
+            "filePath": _java_file_path_for(pkg, "LoginController.java"),
+            "role": "REST API 엔드포인트",
+            "language": "java",
+            "content": f"""package {pkg};
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/auth")
+public class LoginController {{
+
+    private final LoginService loginService;
+
+    public LoginController(LoginService loginService) {{
+        this.loginService = loginService;
+    }}
+
+    @PostMapping("/login")
+    public ResponseEntity<LoginResponse> login(@RequestBody LoginRequest request) {{
+        return ResponseEntity.ok(loginService.login(request));
+    }}
+}}
+""",
+        },
+        "LoginService.java": {
+            "fileName": "LoginService.java",
+            "filePath": _java_file_path_for(pkg, "LoginService.java"),
+            "role": "비즈니스 로직",
+            "language": "java",
+            "content": f"""package {pkg};
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class LoginService {{
+
+    public LoginResponse login(LoginRequest request) {{
+        String username = request.username();
+        String password = request.password();
+        if (username == null || username.isBlank()) {{
+            throw new IllegalArgumentException("username required");
+        }}
+        if (password == null || password.isBlank()) {{
+            throw new IllegalArgumentException("password required");
+        }}
+        if (!"demo".equals(username)) {{
+            throw new IllegalArgumentException("unknown user");
+        }}
+        if (!"demo".equals(password)) {{
+            throw new IllegalArgumentException("invalid password");
+        }}
+        return new LoginResponse("demo-access-token", "Bearer", username);
+    }}
+}}
+""",
+        },
+        "LoginRequest.java": {
+            "fileName": "LoginRequest.java",
+            "filePath": _java_file_path_for(pkg, "LoginRequest.java"),
+            "role": "요청 DTO",
+            "language": "java",
+            "content": f"""package {pkg};
+
+public record LoginRequest(String username, String password) {{
+}}
+""",
+        },
+        "LoginResponse.java": {
+            "fileName": "LoginResponse.java",
+            "filePath": _java_file_path_for(pkg, "LoginResponse.java"),
+            "role": "응답 DTO",
+            "language": "java",
+            "content": f"""package {pkg};
+
+public record LoginResponse(String accessToken, String tokenType, String username) {{
+}}
+""",
+        },
+    }
+
+
+def _normalize_login_spring_boot_codefiles(
+    files: list[Any],
+    changed_fields: list[str],
+) -> list[dict[str, Any]]:
+    """로그인 + Spring Boot: fileName·package·역할 검증, 중복 제거, 필수 4파일 보장."""
+    canon = _canonical_login_spring_four()
+    by_bn: dict[str, dict[str, Any]] = {}
+    extras: list[dict[str, Any]] = []
+
+    for raw in files:
+        if not isinstance(raw, dict):
+            continue
+        it = dict(raw)
+        raw_fn = str(it.get("fileName", "") or "")
+        bn = _basename_java_filename(raw_fn)
+        if not bn.endswith(".java"):
+            continue
+        content = it.get("content", "")
+        c = content if isinstance(content, str) else _coerce_to_string(content)
+        if "/" in raw_fn.replace("\\", "/"):
+            changed_fields.append("codeFiles[].fileName-basename")
+
+        pkg = _extract_java_package(c) or _LOGIN_PKG_DEFAULT
+        it["fileName"] = bn
+        it["filePath"] = _java_file_path_for(pkg, bn)
+        it["language"] = "java"
+        it["content"] = c
+
+        if bn == "AuthService.java":
+            if _is_controller_like_java(c) or _java_declares_type(c, "LoginController"):
+                changed_fields.append("codeFiles[drop].AuthService.java")
+                continue
+            if "LoginService.java" in by_bn:
+                changed_fields.append("codeFiles[drop].AuthService.java")
+                continue
+            if _login_service_content_valid(c):
+                it["fileName"] = "LoginService.java"
+                pkg2 = _extract_java_package(c) or _LOGIN_PKG_DEFAULT
+                it["filePath"] = _java_file_path_for(pkg2, "LoginService.java")
+                by_bn["LoginService.java"] = it
+                changed_fields.append("codeFiles[].AuthService->LoginService")
+                continue
+            changed_fields.append("codeFiles[drop].AuthService.java")
+            continue
+
+        if bn in _LOGIN_REQUIRED_FILES:
+            if bn in by_bn:
+                changed_fields.append(f"codeFiles[dedup].{bn}")
+            by_bn[bn] = it
+        else:
+            extras.append(it)
+
+    extras2: list[dict[str, Any]] = []
+    for it in extras:
+        bn = str(it.get("fileName", "") or "")
+        if bn != "AuthService.java":
+            extras2.append(it)
+            continue
+        c = it.get("content", "")
+        c = c if isinstance(c, str) else _coerce_to_string(c)
+        if _is_controller_like_java(c) or _java_declares_type(c, "LoginController"):
+            changed_fields.append("codeFiles[drop].AuthService.java")
+            continue
+        if "LoginService.java" in by_bn:
+            changed_fields.append("codeFiles[drop].AuthService.java")
+            continue
+        if _login_service_content_valid(c):
+            pkg2 = _extract_java_package(c) or _LOGIN_PKG_DEFAULT
+            it["fileName"] = "LoginService.java"
+            it["filePath"] = _java_file_path_for(pkg2, "LoginService.java")
+            it["content"] = c
+            by_bn["LoginService.java"] = it
+            changed_fields.append("codeFiles[].AuthService->LoginService")
+        else:
+            changed_fields.append("codeFiles[drop].AuthService.java")
+    extras = extras2
+
+    for bn in list(by_bn.keys()):
+        it = by_bn[bn]
+        c = it["content"]
+        exp = bn[:-5] if bn.endswith(".java") else ""
+        if exp and not _java_declares_type(c, exp):
+            if bn == "LoginService.java" and _java_declares_type(c, "LoginController"):
+                del by_bn[bn]
+                changed_fields.append(f"codeFiles[drop].{bn}-wrong-type")
+                continue
+            if bn in canon:
+                by_bn[bn] = dict(canon[bn])
+                changed_fields.append(f"codeFiles[replace].{bn}")
+
+    if "LoginController.java" in by_bn:
+        if not _login_controller_content_valid(by_bn["LoginController.java"]["content"]):
+            by_bn["LoginController.java"] = dict(canon["LoginController.java"])
+            changed_fields.append("codeFiles[replace].LoginController.java")
+
+    if "LoginService.java" in by_bn:
+        if not _login_service_content_valid(by_bn["LoginService.java"]["content"]):
+            by_bn["LoginService.java"] = dict(canon["LoginService.java"])
+            changed_fields.append("codeFiles[replace].LoginService.java")
+
+    if "LoginRequest.java" in by_bn:
+        if not _login_request_content_valid(by_bn["LoginRequest.java"]["content"]):
+            by_bn["LoginRequest.java"] = dict(canon["LoginRequest.java"])
+            changed_fields.append("codeFiles[replace].LoginRequest.java")
+    if "LoginResponse.java" in by_bn:
+        if not _login_response_content_valid(by_bn["LoginResponse.java"]["content"]):
+            by_bn["LoginResponse.java"] = dict(canon["LoginResponse.java"])
+            changed_fields.append("codeFiles[replace].LoginResponse.java")
+
+    for req in _LOGIN_REQUIRED_FILES:
+        if req not in by_bn:
+            by_bn[req] = dict(canon[req])
+            changed_fields.append(f"codeFiles[+].{req}")
+
+    for _bn, item in by_bn.items():
+        cs = item.get("content", "")
+        cs = cs if isinstance(cs, str) else _coerce_to_string(cs)
+        pkgf = _extract_java_package(cs) or _LOGIN_PKG_DEFAULT
+        item["filePath"] = _java_file_path_for(pkgf, str(item.get("fileName", "")))
+
+    for it in extras:
+        bn = _basename_java_filename(str(it.get("fileName", "") or ""))
+        if bn in _LOGIN_REQUIRED_FILES or bn == "AuthService.java":
+            continue
+        if bn in by_bn:
+            continue
+        c2 = it.get("content", "")
+        c2s = c2 if isinstance(c2, str) else _coerce_to_string(c2)
+        pkg3 = _extract_java_package(c2s) or _LOGIN_PKG_DEFAULT
+        it["fileName"] = bn
+        it["filePath"] = _java_file_path_for(pkg3, bn)
+        it["language"] = "java"
+        it["content"] = c2s
+        by_bn[bn] = it
+
+    out: list[dict[str, Any]] = []
+    for req in _LOGIN_REQUIRED_FILES:
+        out.append(dict(by_bn[req]))
+    for bn in sorted(x for x in by_bn if x not in _LOGIN_REQUIRED_FILES):
+        it = dict(by_bn[bn])
+        c = it.get("content", "")
+        cs = c if isinstance(c, str) else _coerce_to_string(c)
+        if _contains_placeholder(cs):
+            changed_fields.append(f"codeFiles[drop].{bn}-placeholder")
+            continue
+        out.append(it)
+    return out
+
+
 def _java_spring_code_templates(prefix: str) -> list[dict[str, Any]]:
     p = prefix
     lc = f"{p}Controller"
@@ -519,73 +856,83 @@ def _apply_post_normalize_quality(
     if inc_code:
         files = normalized.get("codeFiles")
         if isinstance(files, list):
-            prefix = _java_class_prefix(request)
-            use_java = request is None or request.language.lower() == "java"
-            templates = _java_spring_code_templates(prefix) if use_java else []
-            by_name = {str(t["fileName"]): t for t in templates}
-            seen: set[str] = set()
-            new_list: list[dict[str, Any]] = []
-            for index, raw_item in enumerate(files):
-                if not isinstance(raw_item, dict):
-                    continue
-                item = dict(raw_item)
-                fn = str(item.get("fileName", "") or f"file-{index}.java")
-                seen.add(fn)
-                content = item.get("content", "")
-                cstr = content if isinstance(content, str) else _coerce_to_string(content)
-                if _contains_placeholder(cstr):
-                    tpl = by_name.get(fn) if by_name else None
-                    if tpl is None and templates:
-                        tpl = templates[0]
-                    if tpl is not None:
-                        item["content"] = tpl["content"]
-                        if use_java and _is_java_spring(request) and fn not in by_name:
-                            item["fileName"] = tpl["fileName"]
-                            item["role"] = tpl["role"]
-                            item["language"] = "java"
+            if (
+                request is not None
+                and _is_java_spring(request)
+                and _is_login_feature_request(request)
+            ):
+                normalized["codeFiles"] = _normalize_login_spring_boot_codefiles(
+                    files,
+                    changed_fields,
+                )
+            else:
+                prefix = _java_class_prefix(request)
+                use_java = request is None or request.language.lower() == "java"
+                templates = _java_spring_code_templates(prefix) if use_java else []
+                by_name = {str(t["fileName"]): t for t in templates}
+                seen: set[str] = set()
+                new_list: list[dict[str, Any]] = []
+                for index, raw_item in enumerate(files):
+                    if not isinstance(raw_item, dict):
+                        continue
+                    item = dict(raw_item)
+                    fn = str(item.get("fileName", "") or f"file-{index}.java")
+                    seen.add(fn)
+                    content = item.get("content", "")
+                    cstr = content if isinstance(content, str) else _coerce_to_string(content)
+                    if _contains_placeholder(cstr):
+                        tpl = by_name.get(fn) if by_name else None
+                        if tpl is None and templates:
+                            tpl = templates[0]
+                        if tpl is not None:
+                            item["content"] = tpl["content"]
+                            if use_java and _is_java_spring(request) and fn not in by_name:
+                                item["fileName"] = tpl["fileName"]
+                                item["role"] = tpl["role"]
+                                item["language"] = "java"
+                        else:
+                            lang = (
+                                (request.language or "python").lower()
+                                if request is not None
+                                else "python"
+                            )
+                            item["content"] = (
+                                f"# {fn}\n"
+                                "def run() -> None:\n"
+                                "    return None\n"
+                            )
+                            item["language"] = lang
+                        changed_fields.append(f"codeFiles[{index}].content")
+                    elif not isinstance(item.get("content"), str):
+                        item["content"] = cstr
+                    new_list.append(item)
+                if len(new_list) < 3:
+                    if templates:
+                        for tpl in templates:
+                            if len(new_list) >= 3:
+                                break
+                            if tpl["fileName"] not in seen:
+                                new_list.append(dict(tpl))
+                                seen.add(str(tpl["fileName"]))
+                                changed_fields.append(f"codeFiles[+].{tpl['fileName']}")
                     else:
-                        lang = (
-                            (request.language or "python").lower()
-                            if request is not None
-                            else "python"
-                        )
-                        item["content"] = (
-                            f"# {fn}\n"
-                            "def run() -> None:\n"
-                            "    return None\n"
-                        )
-                        item["language"] = lang
-                    changed_fields.append(f"codeFiles[{index}].content")
-                elif not isinstance(item.get("content"), str):
-                    item["content"] = cstr
-                new_list.append(item)
-            if len(new_list) < 3:
-                if templates:
-                    for tpl in templates:
-                        if len(new_list) >= 3:
-                            break
-                        if tpl["fileName"] not in seen:
-                            new_list.append(dict(tpl))
-                            seen.add(str(tpl["fileName"]))
-                            changed_fields.append(f"codeFiles[+].{tpl['fileName']}")
-                else:
-                    pad_i = len(new_list)
-                    while len(new_list) < 3:
-                        new_list.append(
-                            {
-                                "fileName": f"module_{pad_i}.py",
-                                "role": "supporting module",
-                                "language": (request.language if request else "python").lower(),
-                                "content": (
-                                    f"# module {pad_i}\n"
-                                    f"def step_{pad_i}() -> int:\n"
-                                    f"    return {pad_i}\n"
-                                ),
-                            }
-                        )
-                        pad_i += 1
-                        changed_fields.append(f"codeFiles[+].module_{pad_i - 1}.py")
-            normalized["codeFiles"] = new_list
+                        pad_i = len(new_list)
+                        while len(new_list) < 3:
+                            new_list.append(
+                                {
+                                    "fileName": f"module_{pad_i}.py",
+                                    "role": "supporting module",
+                                    "language": (request.language if request else "python").lower(),
+                                    "content": (
+                                        f"# module {pad_i}\n"
+                                        f"def step_{pad_i}() -> int:\n"
+                                        f"    return {pad_i}\n"
+                                    ),
+                                }
+                            )
+                            pad_i += 1
+                            changed_fields.append(f"codeFiles[+].module_{pad_i - 1}.py")
+                normalized["codeFiles"] = new_list
 
     if inc_miss:
         missions = normalized.get("missions")
