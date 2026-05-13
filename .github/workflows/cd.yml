@@ -6,49 +6,83 @@ name: CD
     branches:
       - develop
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   deploy:
     name: Deploy to AWS EC2
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy FastAPI AI Server to EC2
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.AWS_HOST }}
-          username: ${{ secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ secrets.AWS_SSH_PORT }}
-          script: |
-            set -e
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-            echo "===== Move to project directory ====="
-            cd ${{ secrets.AWS_PROJECT_PATH }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-            echo "===== Pull latest develop branch ====="
-            git fetch origin
-            git checkout develop
-            git pull origin develop
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" .
+          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          docker tag "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
 
-            echo "===== Build Docker image ====="
-            docker build -t cobip-ai-server .
-
-            echo "===== Stop old FastAPI container if exists ====="
-            docker stop cobip-ai-server-run || true
-            docker rm cobip-ai-server-run || true
-
-            echo "===== Start Redis and Qdrant if exists ====="
-            docker start cobip_ai-redis-1 || true
-            docker start qdrant || true
-
-            echo "===== Run new FastAPI container ====="
-            docker run -d \
-              --name cobip-ai-server-run \
-              -p 8000:8000 \
-              cobip-ai-server
-
-            echo "===== Check running containers ====="
-            docker ps
-
-            echo "===== Check FastAPI docs ====="
-            curl -I http://localhost:8000/docs
+      - name: Deploy on EC2 via SSM (docker compose)
+        env:
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          AWS_PROJECT_PATH: ${{ secrets.AWS_PROJECT_PATH }}
+          APP_HOST_PORT: ${{ secrets.APP_HOST_PORT }}
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          HOST_PORT="${APP_HOST_PORT:-8000}"
+          PARAMS=$(jq -n \
+            --arg region "$AWS_DEFAULT_REGION" \
+            --arg reg "$ECR_REGISTRY" \
+            --arg img "$IMAGE_URI" \
+            --arg hp "$HOST_PORT" \
+            --arg proj "$AWS_PROJECT_PATH" \
+            '{commands: [
+              ("set -euo pipefail && cd " + ($proj | @sh) + " && git fetch origin && git checkout develop && git pull origin develop && export COBIP_AI_IMAGE=" + ($img | @sh) + " && export COBIP_HOST_PORT=" + ($hp | @sh) + " && aws ecr get-login-password --region " + ($region | @sh) + " | docker login --username AWS --password-stdin " + ($reg | @sh) + " && docker compose -f docker-compose.deploy.yml pull && docker compose -f docker-compose.deploy.yml up -d && docker compose -f docker-compose.deploy.yml ps")
+            ]}')
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "GitHub Actions CD compose (${IMAGE_TAG})" \
+            --timeout-seconds 900 \
+            --parameters "$PARAMS" \
+            --query "Command.CommandId" \
+            --output text)
+          echo "SSM CommandId=${CMD_ID}"
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$INSTANCE_ID"
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "Status" \
+            --output text)
+          echo "SSM status=${STATUS}"
+          if [ "$STATUS" != "Success" ]; then
+            aws ssm get-command-invocation \
+              --command-id "$CMD_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query "StandardErrorContent" \
+              --output text
+            exit 1
+          fi
