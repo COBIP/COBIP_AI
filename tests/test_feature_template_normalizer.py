@@ -563,3 +563,103 @@ def test_final_defense_does_not_add_source_key(sample_request: FeatureTemplateGe
     )
     assert "source" not in out
     FeatureTemplateData(**out)
+
+
+def test_final_defense_include_code_snake_alias_still_runs_codefiles() -> None:
+    from types import SimpleNamespace
+
+    from app.services import feature_template_normalizer as ft
+
+    canon = ft._canonical_login_spring_four()
+    lc = dict(canon["LoginController.java"])
+    lc["fileName"] = "src/main/java/com/example/auth/LoginController.java"
+    one_req = {
+        "requirementId": "r0",
+        "name": "n",
+        "description": "d",
+        "inputValue": "i",
+        "processCondition": "p",
+        "successResult": "s",
+        "failureResult": "f",
+        "priority": "HIGH",
+        "relatedScreenOrApi": "api",
+    }
+    req = SimpleNamespace(
+        language="java",
+        framework="spring-boot",
+        featureName="로그인",
+        level=DifficultyLevel.BEGINNER,
+        include_code=True,
+    )
+    norm: dict = {"requirements": [one_req], "codeFiles": [lc, dict(canon["LoginService.java"])]}
+    changed: list[str] = []
+    ft._ensure_final_login_defense(norm, req, changed)
+    names = [f["fileName"] for f in norm["codeFiles"]]
+    assert len(norm["codeFiles"]) >= 4
+    for need in ("LoginController.java", "LoginService.java", "LoginRequest.java", "LoginResponse.java"):
+        assert need in names
+    assert all("/" not in str(f.get("fileName", "")) for f in norm["codeFiles"])
+
+
+def test_final_defense_long_path_normalized_to_basename(sample_request: FeatureTemplateGenerateRequest) -> None:
+    from app.services import feature_template_normalizer as ft
+
+    canon = ft._canonical_login_spring_four()
+    raw = dict(canon["LoginController.java"])
+    raw["fileName"] = "src/main/java/com/example/auth/LoginController.java"
+    out = FeatureTemplateNormalizer.normalize(
+        {
+            "codeFiles": [raw, dict(canon["LoginService.java"])],
+            "requirements": [
+                {
+                    "requirementId": "r0",
+                    "name": "n",
+                    "description": "d",
+                    "inputValue": "i",
+                    "processCondition": "p",
+                    "successResult": "s",
+                    "failureResult": "f",
+                    "priority": "HIGH",
+                    "relatedScreenOrApi": "api",
+                }
+            ],
+        },
+        sample_request,
+    )
+    lc = next(f for f in out["codeFiles"] if f["fileName"] == "LoginController.java")
+    assert lc["fileName"] == "LoginController.java"
+    assert "/" not in lc["fileName"]
+    assert len(out["codeFiles"]) >= 4
+    FeatureTemplateData(**out)
+
+
+def test_final_defense_adds_request_and_response_when_missing_only_controller_service(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    from app.services import feature_template_normalizer as ft
+
+    canon = ft._canonical_login_spring_four()
+    out = FeatureTemplateNormalizer.normalize(
+        {
+            "codeFiles": [dict(canon["LoginController.java"]), dict(canon["LoginService.java"])],
+            "requirements": [
+                {
+                    "requirementId": "r0",
+                    "name": "n",
+                    "description": "d",
+                    "inputValue": "i",
+                    "processCondition": "p",
+                    "successResult": "s",
+                    "failureResult": "f",
+                    "priority": "HIGH",
+                    "relatedScreenOrApi": "api",
+                }
+            ],
+        },
+        sample_request,
+    )
+    names = [f["fileName"] for f in out["codeFiles"]]
+    assert "LoginRequest.java" in names
+    assert "LoginResponse.java" in names
+    assert all("/" not in str(n) for n in names)
+    FeatureTemplateData(**out)
