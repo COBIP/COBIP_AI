@@ -83,9 +83,10 @@ def test_code_view_files_unwrap(sample_request: FeatureTemplateGenerateRequest) 
         }
     }
     out = FeatureTemplateNormalizer.normalize(raw, sample_request)
-    assert len(out["codeFiles"]) >= 3
+    assert len(out["codeFiles"]) >= 4
     names = [f["fileName"] for f in out["codeFiles"]]
     assert "A.java" in names
+    assert "LoginController.java" in names
     a = next(f for f in out["codeFiles"] if f["fileName"] == "A.java")
     assert a["content"] == "// ok"
 
@@ -264,10 +265,9 @@ def test_codefiles_placeholder_content_replaced_with_java(sample_request: Featur
         ],
     }
     out = FeatureTemplateNormalizer.normalize(raw, sample_request)
-    assert "실제 동작 가능한 코드 문자열" not in out["codeFiles"][0]["content"]
-    assert "@RestController" in out["codeFiles"][0]["content"] or "package com.example.auth" in out["codeFiles"][0][
-        "content"
-    ]
+    ctrl = next(f for f in out["codeFiles"] if f["fileName"] == "LoginController.java")
+    assert "실제 동작 가능한 코드 문자열" not in ctrl["content"]
+    assert "@RestController" in ctrl["content"]
     FeatureTemplateData(**out)
 
 
@@ -309,7 +309,7 @@ def test_codefiles_single_entry_padded_to_at_least_three(sample_request: Feature
         ],
     }
     out = FeatureTemplateNormalizer.normalize(raw, sample_request)
-    assert len(out["codeFiles"]) >= 3
+    assert len(out["codeFiles"]) >= 4
     FeatureTemplateData(**out)
 
 
@@ -361,4 +361,157 @@ def test_missions_goal_and_hints_absorbed_into_lists(sample_request: FeatureTemp
     assert out["missions"][0]["requirements"] == ["목표 한 줄", "힌트1", "힌트2"]
     assert "goal" not in out["missions"][0]
     assert "hints" not in out["missions"][0]
+    FeatureTemplateData(**out)
+
+
+_LOGIN_CTRL_SNIPPET = """package com.example.auth;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+public class LoginController { }
+"""
+
+
+def test_auth_service_controller_body_dropped_when_login_service_present(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "codeFiles": [
+            {
+                "fileName": "LoginService.java",
+                "role": "svc",
+                "language": "java",
+                "content": "package com.example.auth;\n@Service\npublic class LoginService {\n  public String login() { return \"x\"; }\n}\n",
+            },
+            {
+                "fileName": "AuthService.java",
+                "role": "svc",
+                "language": "java",
+                "content": _LOGIN_CTRL_SNIPPET,
+            },
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    names = [f["fileName"] for f in out["codeFiles"]]
+    assert "AuthService.java" not in names
+    svc = next(f for f in out["codeFiles"] if f["fileName"] == "LoginService.java")
+    assert "@RestController" not in svc["content"]
+    assert "class LoginService" in svc["content"]
+    FeatureTemplateData(**out)
+
+
+def test_login_service_with_rest_controller_replaced(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "codeFiles": [
+            {
+                "fileName": "LoginService.java",
+                "role": "svc",
+                "language": "java",
+                "content": _LOGIN_CTRL_SNIPPET,
+            },
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    svc = next(f for f in out["codeFiles"] if f["fileName"] == "LoginService.java")
+    assert "@Service" in svc["content"]
+    assert "@RestController" not in svc["content"]
+    assert "login(LoginRequest request)" in svc["content"]
+    FeatureTemplateData(**out)
+
+
+def test_codefile_basename_strips_path(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "codeFiles": [
+            {
+                "fileName": "src/main/java/com/example/auth/LoginController.java",
+                "role": "c",
+                "language": "java",
+                "content": _LOGIN_CTRL_SNIPPET,
+            },
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    lc = next(f for f in out["codeFiles"] if f["fileName"] == "LoginController.java")
+    assert lc["fileName"] == "LoginController.java"
+    assert lc["filePath"].endswith("com/example/auth/LoginController.java")
+    FeatureTemplateData(**out)
+
+
+def test_codefile_filepath_matches_custom_package(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "codeFiles": [
+            {
+                "fileName": "LoginRequest.java",
+                "role": "dto",
+                "language": "java",
+                "content": "package com.example.demo;\npublic record LoginRequest(String username, String password) {}\n",
+            },
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    lr = next(f for f in out["codeFiles"] if f["fileName"] == "LoginRequest.java")
+    assert "com/example/demo/LoginRequest.java" in lr["filePath"].replace("\\", "/")
+    FeatureTemplateData(**out)
+
+
+def test_duplicate_login_controller_deduped(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "codeFiles": [
+            {"fileName": "LoginController.java", "role": "c", "language": "java", "content": _LOGIN_CTRL_SNIPPET},
+            {
+                "fileName": "LoginController.java",
+                "role": "c2",
+                "language": "java",
+                "content": "package com.example.auth;\n@RestController\nclass LoginController { int b = 2; }\n",
+            },
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert sum(1 for f in out["codeFiles"] if f["fileName"] == "LoginController.java") == 1
+    FeatureTemplateData(**out)
+
+
+def test_login_spring_has_four_canonical_files(sample_request: FeatureTemplateGenerateRequest) -> None:
+    out = FeatureTemplateNormalizer.normalize({"codeFiles": []}, sample_request)
+    names = [f["fileName"] for f in out["codeFiles"]]
+    for req in ("LoginController.java", "LoginService.java", "LoginRequest.java", "LoginResponse.java"):
+        assert req in names
+    assert names.index("LoginController.java") < names.index("LoginService.java")
+    FeatureTemplateData(**out)
+
+
+def test_login_canonical_files_declare_matching_types(sample_request: FeatureTemplateGenerateRequest) -> None:
+    out = FeatureTemplateNormalizer.normalize({"codeFiles": []}, sample_request)
+    by = {f["fileName"]: f["content"] for f in out["codeFiles"]}
+    assert "class LoginController" in by["LoginController.java"]
+    assert "class LoginService" in by["LoginService.java"]
+    assert "record LoginRequest" in by["LoginRequest.java"]
+    assert "record LoginResponse" in by["LoginResponse.java"]
+
+
+def test_login_codefiles_no_placeholders_and_no_source_key(sample_request: FeatureTemplateGenerateRequest) -> None:
+    out = FeatureTemplateNormalizer.normalize(
+        {
+            "codeFiles": [
+                {
+                    "fileName": "LoginService.java",
+                    "role": "x",
+                    "language": "java",
+                    "content": "실제 동작 가능한 코드 문자열",
+                }
+            ]
+        },
+        sample_request,
+    )
+    dumped = json.dumps(out["codeFiles"], ensure_ascii=False)
+    for marker in (
+        "실제 동작 가능한 코드 문자열",
+        "...",
+        "TODO",
+        "예시 코드",
+        "생략",
+        "placeholder",
+        "플레이스홀더",
+    ):
+        assert marker not in dumped
+    assert "source" not in out
     FeatureTemplateData(**out)

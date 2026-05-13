@@ -36,6 +36,12 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - missions[].missionType 은 반드시 문자열이다. 예: "implementation", "extension", "validation"
 - 숫자 필드를 제외하고 문자열 필드는 반드시 문자열로 반환한다.
 - codeFiles.content, interviewQuestions, nextRecommendations 값에는 점 세 개 연속, 생략, TODO, 예시 코드, 플레이스홀더, "실제 동작 가능한 코드 문자열" 같은 더미·준비용 문구를 절대 넣지 않는다.
+- codeFiles 는 fileName 에 파일명만(예: LoginController.java) 넣고, 전체 경로는 filePath(예: src/main/java/com/example/auth/LoginController.java)에 넣는다.
+- codeFiles 각 항목의 content 안의 package 선언과 filePath 의 디렉터리 경로가 반드시 일치해야 한다. 불명확하면 package com.example.auth 와 위 경로 규칙을 따른다.
+- 파일명과 내부 class/record 이름이 반드시 일치해야 한다. LoginService.java 안에는 class LoginService 만 있어야 한다.
+- LoginService.java 에는 Controller 전용 애너테이션(@RestController, @RequestMapping, @PostMapping 등)이나 Controller 코드를 넣지 않는다.
+- AuthService.java 처럼 역할이 애매한 파일보다 LoginService.java 를 사용한다. LoginRequest.java, LoginResponse.java 는 독립 파일로 반드시 생성한다.
+- 동일 fileName 이거나 동일 content 를 반복 생성하지 않는다.
 
 [includeCode / includeMissions / includeInterview — user 프롬프트 값을 그대로 따른다]
 - includeCode 가 false 이면 codeFiles 는 반드시 빈 배열 [] 이다 (key 는 존재).

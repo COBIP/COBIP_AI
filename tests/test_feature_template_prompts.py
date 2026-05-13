@@ -79,6 +79,7 @@ def test_prompt_forbids_placeholder_dummy_phrases() -> None:
     text = build_feature_template_prompt(_req())
     assert "더미" in text or "준비용" in text or "플레이스홀더" in text
     assert "실제 동작 가능한 코드 문자열" in text
+    assert "filePath" in text and "LoginService.java" in text
 
 
 def test_prompt_quality_minimums() -> None:
