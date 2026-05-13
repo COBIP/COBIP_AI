@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any
 
+from app.models.enums import DifficultyLevel
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
 __all__ = [
@@ -14,6 +15,14 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_MISSION_REQUIREMENTS: tuple[str, ...] = (
+    "미션 목표를 이해하고 필요한 기능을 구현한다.",
+)
+_DEFAULT_MISSION_SUCCESS: tuple[str, ...] = (
+    "요구사항에 맞게 기능이 정상 동작한다.",
+)
+_DIFFICULTY_VALID: frozenset[str] = frozenset(m.value for m in DifficultyLevel)
 
 _PRIORITY_NUMBER_MAP: dict[int, str] = {
     1: "HIGH",
@@ -146,6 +155,37 @@ def _is_missing_or_blank_str(value: object) -> bool:
     return False
 
 
+def _str_list_effectively_empty(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, list):
+        return True
+    return not any(_coerce_to_string(item).strip() for item in value)
+
+
+def _mission_hints_parts(hints_raw: object, hint_raw: object) -> list[str]:
+    parts: list[str] = []
+    for src in (hints_raw, hint_raw):
+        if src is None:
+            continue
+        if isinstance(src, list):
+            for x in src:
+                t = _coerce_to_string(x).strip()
+                if t:
+                    parts.append(t)
+        else:
+            t = _coerce_to_string(src).strip()
+            if t:
+                parts.append(t)
+    return parts
+
+
+def _default_mission_difficulty(request: FeatureTemplateGenerateRequest | None) -> str:
+    if request is not None:
+        return request.level.value
+    return DifficultyLevel.BEGINNER.value
+
+
 def normalize_feature_template_payload(
     payload: dict,
     request: FeatureTemplateGenerateRequest | None = None,
@@ -263,6 +303,12 @@ def normalize_feature_template_payload(
                 f"missions[{index}]",
                 changed_fields,
             )
+            if (
+                "relatedRequirements" not in normalized_item
+                or normalized_item.get("relatedRequirements") is None
+            ):
+                normalized_item["relatedRequirements"] = []
+                changed_fields.append(f"missions[{index}].relatedRequirements")
             for field in _STRING_LIST_FIELDS["missions"]:
                 normalized_item = _normalize_string_list_field(
                     normalized_item,
@@ -270,13 +316,59 @@ def normalize_feature_template_payload(
                     f"missions[{index}]",
                     changed_fields,
                 )
+
+            hints_raw = normalized_item.pop("hints", None)
+            goal_raw = normalized_item.pop("goal", None)
+            hint_raw = normalized_item.pop("hint", None)
+
+            goal_s = _coerce_to_string(goal_raw).strip() if goal_raw is not None else ""
+            hints_parts = _mission_hints_parts(hints_raw, hint_raw)
+
             mission_type = normalized_item.get("missionType")
-            if mission_type is None:
+            if _is_missing_or_blank_str(mission_type):
                 normalized_item["missionType"] = "implementation"
                 changed_fields.append(f"missions[{index}].missionType")
             elif not isinstance(mission_type, str):
                 normalized_item["missionType"] = str(mission_type)
                 changed_fields.append(f"missions[{index}].missionType")
+
+            goal_consumed = False
+            if _str_list_effectively_empty(normalized_item.get("requirements")):
+                merged: list[str] = []
+                if goal_s:
+                    merged.append(goal_s)
+                    goal_consumed = True
+                for h in hints_parts:
+                    if h not in merged:
+                        merged.append(h)
+                if not merged:
+                    merged = list(_DEFAULT_MISSION_REQUIREMENTS)
+                normalized_item["requirements"] = merged
+                changed_fields.append(f"missions[{index}].requirements")
+
+            if _str_list_effectively_empty(normalized_item.get("successCriteria")):
+                if goal_s and not goal_consumed:
+                    normalized_item["successCriteria"] = [goal_s]
+                else:
+                    normalized_item["successCriteria"] = list(_DEFAULT_MISSION_SUCCESS)
+                changed_fields.append(f"missions[{index}].successCriteria")
+
+            diff = normalized_item.get("difficulty")
+            default_diff = _default_mission_difficulty(request)
+            if diff is None or (isinstance(diff, str) and not diff.strip()):
+                normalized_item["difficulty"] = default_diff
+                changed_fields.append(f"missions[{index}].difficulty")
+            elif isinstance(diff, str):
+                dlow = diff.strip().lower()
+                if dlow not in _DIFFICULTY_VALID:
+                    normalized_item["difficulty"] = default_diff
+                    changed_fields.append(f"missions[{index}].difficulty")
+            else:
+                normalized_item["difficulty"] = str(diff)
+                if str(normalized_item["difficulty"]).lower() not in _DIFFICULTY_VALID:
+                    normalized_item["difficulty"] = default_diff
+                    changed_fields.append(f"missions[{index}].difficulty")
+
             normalized_missions.append(normalized_item)
         normalized["missions"] = normalized_missions
 

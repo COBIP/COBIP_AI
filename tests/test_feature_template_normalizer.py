@@ -165,3 +165,84 @@ def test_requirements_defaults_without_request_use_generic_related() -> None:
     assert out["requirements"][0]["priority"] == "MEDIUM"
     assert out["requirements"][0]["relatedScreenOrApi"] == "관련 화면 / API"
     FeatureTemplateData(**out)
+
+
+def test_missions_missing_optional_fields_get_defaults_and_pass_pydantic(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "missions": [
+            {
+                "missionId": "m1",
+                "title": "미션 1",
+                "description": "설명 1",
+            },
+            {
+                "missionId": "m2",
+                "title": "미션 2",
+                "description": "설명 2",
+                "missionType": "quiz",
+            },
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert out["missions"][0]["missionType"] == "implementation"
+    assert out["missions"][0]["requirements"] == [
+        "미션 목표를 이해하고 필요한 기능을 구현한다.",
+    ]
+    assert out["missions"][0]["successCriteria"] == [
+        "요구사항에 맞게 기능이 정상 동작한다.",
+    ]
+    assert out["missions"][0]["relatedRequirements"] == []
+    assert out["missions"][0]["difficulty"] == "beginner"
+    assert out["missions"][1]["missionType"] == "quiz"
+    assert out["missions"][1]["requirements"] == [
+        "미션 목표를 이해하고 필요한 기능을 구현한다.",
+    ]
+    FeatureTemplateData(**out)
+
+
+def test_missions_difficulty_uses_request_level_when_missing() -> None:
+    req = FeatureTemplateGenerateRequest(
+        language="java",
+        framework=None,
+        featureName="테스트",
+        level=DifficultyLevel.ADVANCED,
+        includeCode=False,
+        includeMissions=True,
+        includeInterview=False,
+    )
+    raw = {
+        "missions": [
+            {
+                "missionId": "m1",
+                "title": "t",
+                "description": "d",
+                "requirements": ["r"],
+                "successCriteria": ["s"],
+                "relatedRequirements": [],
+            }
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, req)
+    assert out["missions"][0]["difficulty"] == "advanced"
+    FeatureTemplateData(**out)
+
+
+def test_missions_goal_and_hints_absorbed_into_lists(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {
+        "missions": [
+            {
+                "missionId": "m1",
+                "title": "t",
+                "description": "d",
+                "goal": "목표 한 줄",
+                "hints": ["힌트1", "힌트2"],
+            }
+        ],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert out["missions"][0]["requirements"] == ["목표 한 줄", "힌트1", "힌트2"]
+    assert "goal" not in out["missions"][0]
+    assert "hints" not in out["missions"][0]
+    FeatureTemplateData(**out)
