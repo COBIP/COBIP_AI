@@ -1355,8 +1355,9 @@ def normalize_feature_template_payload(
                     normalized_item["successCriteria"] = list(_DEFAULT_MISSION_SUCCESS)
                 changed_fields.append(f"missions[{index}].successCriteria")
 
-            diff = normalized_item.get("difficulty")
             default_diff = _default_mission_difficulty(request)
+            normalized_item.setdefault("difficulty", default_diff)
+            diff = normalized_item.get("difficulty")
             if diff is None or (isinstance(diff, str) and not diff.strip()):
                 normalized_item["difficulty"] = default_diff
                 changed_fields.append(f"missions[{index}].difficulty")

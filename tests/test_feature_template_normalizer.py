@@ -204,6 +204,7 @@ def test_missions_missing_optional_fields_get_defaults_and_pass_pydantic(
     assert out["missions"][0]["relatedRequirements"] == []
     assert out["missions"][0]["difficulty"] == "beginner"
     assert out["missions"][1]["missionType"] == "quiz"
+    assert out["missions"][1]["difficulty"] == "beginner"
     assert out["missions"][1]["requirements"] == [
         "미션 목표를 이해하고 필요한 기능을 구현한다.",
     ]
