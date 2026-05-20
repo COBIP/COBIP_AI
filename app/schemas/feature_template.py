@@ -193,11 +193,19 @@ class FeatureTemplateData(BaseModel):
 class FeatureTemplateGenerateResult(BaseModel):
     template: FeatureTemplateData
     source: Literal["ollama", "fallback"]
+    appliedReferences: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="프롬프트에 주입된 RAG reference 요약(실제 LLM 인용 여부와 무관)",
+    )
 
 
 class FeatureTemplateGenerateResponse(BaseModel):
     template: FeatureTemplateData
     source: Literal["ollama", "fallback"]
+    appliedReferences: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="프롬프트에 주입된 RAG reference 요약",
+    )
 
 
 class FeatureTemplateRegenerateSectionResult(BaseModel):

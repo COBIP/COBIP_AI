@@ -43,6 +43,7 @@ def test_agentic_rag_routes_feature_template_generate(
         return FeatureTemplateGenerateResult(
             template=_minimal_template(request.featureName),
             source="fallback",
+            appliedReferences=[],
         )
 
     monkeypatch.setattr(FeatureTemplateGenerator, "generate", fake_generate)
@@ -70,6 +71,7 @@ def test_agentic_rag_routes_feature_template_generate(
     assert body["data"]["intent"] == "feature_template_generate"
     assert body["data"]["resultType"] == "feature_template"
     assert body["data"]["result"]["template"]["overview"]["featureName"] == "로그인"
+    assert body["data"]["result"].get("appliedReferences") == []
     assert body["data"]["trace"]["handler"] == "FeatureTemplateGenerator.generate"
     assert "feature_template_generate_execution" in body["data"]["trace"]["steps"]
 

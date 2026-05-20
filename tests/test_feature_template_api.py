@@ -37,3 +37,4 @@ def test_generate_endpoint_template_has_all_sections() -> None:
     assert body.get("success") is True
     template = body["data"]["template"]
     assert set(template.keys()) == _CANONICAL_KEYS
+    assert body["data"].get("appliedReferences") == []

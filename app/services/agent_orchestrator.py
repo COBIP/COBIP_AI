@@ -250,6 +250,7 @@ class AgentOrchestrator:
                 "template": result.template.model_dump(),
                 "source": result.source,
                 "request": feature_request.model_dump(),
+                "appliedReferences": result.appliedReferences,
             },
             trace=trace,
         )

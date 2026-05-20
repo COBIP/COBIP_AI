@@ -19,40 +19,54 @@ from app.prompts.feature_template_prompts import (
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
 __all__ = [
+    "build_applied_references_payload",
     "build_feature_template_prompt",
+    "build_feature_template_prompt_with_applied_rags",
     "build_feature_template_section_prompt",
     "format_rag_references_for_feature_template_prompt",
+    "select_usable_rag_references",
 ]
 
 _RAG_CONTEXT_HEADER = "[검색 근거 / RAG Context]"
 _MAX_RAG_REFERENCES = 5
 _MAX_RAG_CONTENT_CHARS = 1000
+_CONTENT_PREVIEW_MAX_CHARS = 200  # 150~250자 권장 범위 내 기본값
 
 
-def format_rag_references_for_feature_template_prompt(
-    references: list[Any],
+def select_usable_rag_references(
+    references: list[Any] | None,
     *,
     max_items: int = _MAX_RAG_REFERENCES,
-    max_content_chars: int = _MAX_RAG_CONTENT_CHARS,
-) -> str:
-    """RAG 검색 결과를 기능템플릿 user 프롬프트용 블록으로 포맷한다.
-
-    - 유효한 content가 있는 항목만 포함한다.
-    - 최대 max_items개 (기본 5, 운영에서는 3~5 범위 권장).
-    - content는 max_content_chars자로 자른다 (기본 1000).
-    - title / 출처(sourceType 또는 source) / score / 내용을 선택적으로 포함한다.
-    - references가 비어 있거나 유효 항목이 없으면 빈 문자열을 반환한다.
-    """
+) -> list[dict[str, Any]]:
+    """프롬프트 주입·appliedReferences 공통: 유효한 content가 있는 항목만 최대 max_items개."""
 
     if not references or max_items < 1:
-        return ""
-
-    blocks: list[str] = []
+        return []
+    out: list[dict[str, Any]] = []
     for raw in references:
-        if len(blocks) >= max_items:
+        if len(out) >= max_items:
             break
         if not isinstance(raw, dict):
             continue
+        content = raw.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        out.append(dict(raw))
+    return out
+
+
+def _format_rag_block_from_selected(
+    selected: list[dict[str, Any]],
+    *,
+    max_content_chars: int = _MAX_RAG_CONTENT_CHARS,
+) -> str:
+    """select_usable_rag_references 결과만 받아 RAG Context 블록 문자열을 만든다."""
+
+    if not selected:
+        return ""
+
+    blocks: list[str] = []
+    for raw in selected:
         content = raw.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
@@ -93,6 +107,65 @@ def format_rag_references_for_feature_template_prompt(
     return f"{header}\n\n{intro}\n\n" + "\n\n".join(blocks)
 
 
+def build_applied_references_payload(
+    selected: list[dict[str, Any]],
+    *,
+    preview_max_chars: int = _CONTENT_PREVIEW_MAX_CHARS,
+) -> list[dict[str, Any]]:
+    """프롬프트에 실제 포함된 RAG reference와 동일 순서·동일 건으로 응답용 요약을 만든다."""
+
+    out: list[dict[str, Any]] = []
+    for raw in selected:
+        content = raw.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        body = content.strip()
+        limit = min(max(int(preview_max_chars), 1), 250)
+        preview = body[:limit]
+        if len(body) > limit:
+            preview = body[: limit - 1] + "…"
+
+        item: dict[str, Any] = {"usedInPrompt": True, "contentPreview": preview}
+
+        title = raw.get("title")
+        if isinstance(title, str) and title.strip():
+            item["title"] = title.strip()
+
+        src = raw.get("source")
+        if isinstance(src, str) and src.strip():
+            item["source"] = src.strip()
+
+        st = raw.get("sourceType")
+        if isinstance(st, str) and st.strip():
+            item["sourceType"] = st.strip()
+
+        sc = raw.get("score")
+        if isinstance(sc, (int, float)):
+            item["score"] = sc
+
+        out.append(item)
+    return out
+
+
+def format_rag_references_for_feature_template_prompt(
+    references: list[Any],
+    *,
+    max_items: int = _MAX_RAG_REFERENCES,
+    max_content_chars: int = _MAX_RAG_CONTENT_CHARS,
+) -> str:
+    """RAG 검색 결과를 기능템플릿 user 프롬프트용 블록으로 포맷한다.
+
+    - 유효한 content가 있는 항목만 포함한다.
+    - 최대 max_items개 (기본 5, 운영에서는 3~5 범위 권장).
+    - content는 max_content_chars자로 자른다 (기본 1000).
+    - title / 출처(sourceType 또는 source) / score / 내용을 선택적으로 포함한다.
+    - references가 비어 있거나 유효 항목이 없으면 빈 문자열을 반환한다.
+    """
+
+    selected = select_usable_rag_references(references, max_items=max_items)
+    return _format_rag_block_from_selected(selected, max_content_chars=max_content_chars)
+
+
 def _extract_rag_references_from_reference_context(
     reference_context: dict[str, Any] | None,
 ) -> list[Any]:
@@ -121,27 +194,20 @@ def _reference_context_for_prompt_json(
     return out
 
 
-def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> str:
-    """기능템플릿 생성용 최종 프롬프트 문자열을 조립한다.
-
-    조립 결과는 다음을 보장한다:
-    - language / framework / featureName / level 포함
-    - includeCode / includeMissions / includeInterview 옵션 반영
-    - overview.techStack 에 language·framework 반영 지시 (프롬프트 본문)
-    - 기능템플릿 9개 섹션 순서 명시 (overview → requirements → flow
-      → apiSpec → codeFiles → basicQuestions → missions
-      → interviewQuestions → nextRecommendations)
-    - apiSpec은 flow 다음, codeFiles 이전에 위치
-    """
+def build_feature_template_prompt_with_applied_rags(
+    request: FeatureTemplateGenerateRequest,
+) -> tuple[str, list[dict[str, Any]]]:
+    """프롬프트 문자열과 프롬프트에 반영된 RAG reference 요약(appliedReferences)을 함께 반환한다."""
 
     framework_text = request.framework if request.framework else "(미지정)"
 
     rag_refs = _extract_rag_references_from_reference_context(request.referenceContext)
-    rag_body = format_rag_references_for_feature_template_prompt(
-        rag_refs,
-        max_items=_MAX_RAG_REFERENCES,
+    selected = select_usable_rag_references(rag_refs)
+    rag_body = _format_rag_block_from_selected(
+        selected,
         max_content_chars=_MAX_RAG_CONTENT_CHARS,
     )
+    applied = build_applied_references_payload(selected)
     rag_context_section = f"\n\n{rag_body}" if rag_body else ""
 
     omit_rag_in_json = bool(rag_body)
@@ -171,7 +237,25 @@ def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> st
         referenceContext=reference_context_text,
     )
 
-    return f"{FEATURE_TEMPLATE_SYSTEM_PROMPT}\n\n{user_prompt}"
+    prompt = f"{FEATURE_TEMPLATE_SYSTEM_PROMPT}\n\n{user_prompt}"
+    return prompt, applied
+
+
+def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> str:
+    """기능템플릿 생성용 최종 프롬프트 문자열을 조립한다.
+
+    조립 결과는 다음을 보장한다:
+    - language / framework / featureName / level 포함
+    - includeCode / includeMissions / includeInterview 옵션 반영
+    - overview.techStack 에 language·framework 반영 지시 (프롬프트 본문)
+    - 기능템플릿 9개 섹션 순서 명시 (overview → requirements → flow
+      → apiSpec → codeFiles → basicQuestions → missions
+      → interviewQuestions → nextRecommendations)
+    - apiSpec은 flow 다음, codeFiles 이전에 위치
+    """
+
+    prompt, _applied = build_feature_template_prompt_with_applied_rags(request)
+    return prompt
 
 
 def build_feature_template_section_prompt(
