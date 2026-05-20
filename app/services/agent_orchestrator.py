@@ -108,7 +108,7 @@ class AgentOrchestrator:
 
         t0 = time.perf_counter()
         steps = ["natural_language_intent_classification"]
-        intent = self._classify_agentic_intent(request)
+        intent, intent_reason = self._classify_agentic_intent_with_reason(request)
         route = AgentRouter().route(intent, request.model_dump())
         service_name = route["service_name"]
         steps.append("tool_handler_selection")
@@ -133,6 +133,7 @@ class AgentOrchestrator:
                 steps=steps,
                 t0=t0,
                 rag_used=rag_used,
+                intent_reason=intent_reason,
             )
             return response
 
@@ -143,18 +144,40 @@ class AgentOrchestrator:
         )
         steps.append("chat_handler_execution")
         chat_result = await self.run_chat(chat_request)
+        steps.append("rag_context_detection")
         rag_used = chat_result.ragUsed
         references = chat_result.references
+        rag_ref_count = len(references) if rag_used else 0
+        rag_ctx_available = bool(rag_used and rag_ref_count > 0)
+        inner_trace = chat_result.agent.trace
+        inner_handler = inner_trace.handler if inner_trace is not None else "ChatService"
+        tool_cand = _TOOL_REGISTRY.get_tool_names_for_intent(chat_result.agent.intent)
+        source = chat_result.source
         latency_ms = max(0, int((time.perf_counter() - t0) * 1000))
+        handler_reason = (
+            f"CHAT intent routed via AgentOrchestrator.run_chat -> {inner_handler}"
+        )
+        route_decision = f"{IntentType.CHAT.value} -> {service_name}"
         trace = AgenticRagTrace(
             classifier="AgenticRuleClassifier",
             intent=IntentType.CHAT,
             serviceName=service_name,
             handler="AgentOrchestrator.run_chat",
-            steps=steps + ["result_serialization"],
+            steps=steps + ["result_serialization", "trace_metadata_enrichment"],
             ragUsed=rag_used,
             references=references,
             latencyMs=latency_ms,
+            toolCandidates=tool_cand,
+            intentReason=intent_reason,
+            handlerReason=handler_reason,
+            ragContextAvailable=rag_ctx_available,
+            ragReferenceCount=rag_ref_count,
+            appliedReferenceCount=0,
+            fallbackUsed=source == "fallback",
+            source=source,
+            resultType="chat",
+            routeDecision=route_decision,
+            executionMode=str(chat_result.agent.mode),
         )
         return AgenticRagResponseData(
             intent=IntentType.CHAT,
@@ -223,25 +246,56 @@ class AgentOrchestrator:
         steps: list[str],
         t0: float,
         rag_used: bool,
+        intent_reason: str,
     ) -> AgenticRagResponseData:
+        from app.services.prompt_builder import (
+            extract_raw_rag_references_from_reference_context,
+            select_usable_rag_references,
+        )
+
         feature_request, inferred = self._build_feature_template_request(
             request,
             references=references,
         )
         steps.append("feature_template_request_resolution")
+        steps.append("rag_context_detection")
+        raw_rag = extract_raw_rag_references_from_reference_context(
+            feature_request.referenceContext,
+        )
+        usable_rag = select_usable_rag_references(raw_rag)
+        rag_ref_count = len(usable_rag)
+        rag_ctx_available = rag_ref_count > 0
+
         result = FeatureTemplateGenerator().generate(feature_request)
         steps.append("feature_template_generate_execution")
         latency_ms = max(0, int((time.perf_counter() - t0) * 1000))
+        source = str(result.source)
+        applied_count = len(result.appliedReferences)
+        handler_reason = (
+            "FEATURE_TEMPLATE_GENERATE intent routed to FeatureTemplateGenerator.generate"
+        )
+        route_decision = "FEATURE_TEMPLATE_GENERATE -> FeatureTemplateGenerator.generate"
         trace = AgenticRagTrace(
             classifier="AgenticRuleClassifier",
             intent=IntentType.FEATURE_TEMPLATE_GENERATE,
             serviceName=service_name,
             handler="FeatureTemplateGenerator.generate",
-            steps=steps + ["result_serialization"],
+            steps=steps + ["result_serialization", "trace_metadata_enrichment"],
             ragUsed=rag_used,
             references=references,
             inferredFields=inferred,
             latencyMs=latency_ms,
+            toolCandidates=[service_name],
+            intentReason=intent_reason,
+            handlerReason=handler_reason,
+            ragContextAvailable=rag_ctx_available,
+            ragReferenceCount=rag_ref_count,
+            appliedReferenceCount=applied_count,
+            fallbackUsed=source == "fallback",
+            source=source,
+            resultType="feature_template",
+            routeDecision=route_decision,
+            executionMode="rule_based",
         )
         return AgenticRagResponseData(
             intent=IntentType.FEATURE_TEMPLATE_GENERATE,
@@ -256,9 +310,13 @@ class AgentOrchestrator:
         )
 
     @staticmethod
-    def _classify_agentic_intent(request: AgenticRagRequest) -> IntentType:
+    def _classify_agentic_intent_with_reason(
+        request: AgenticRagRequest,
+    ) -> tuple[IntentType, str]:
         if request.featureTemplate is not None:
-            return IntentType.FEATURE_TEMPLATE_GENERATE
+            return IntentType.FEATURE_TEMPLATE_GENERATE, (
+                "request included structured featureTemplate payload"
+            )
 
         text = request.message
         lower_fold = text.lower().replace(" ", "")
@@ -268,8 +326,24 @@ class AgentOrchestrator:
         )
         has_action_hint = any(hint in text for hint in _FEATURE_ACTION_HINTS)
         if has_feature_hint and has_action_hint:
-            return IntentType.FEATURE_TEMPLATE_GENERATE
-        return IntentType.CHAT
+            return IntentType.FEATURE_TEMPLATE_GENERATE, (
+                "message contains feature template generation keywords and action intent"
+            )
+        if AgentOrchestrator._rag_signal_in_message(request):
+            return IntentType.CHAT, (
+                "message matched general chat path; RAG-related keywords or useRag present "
+                "for optional retrieval delegation"
+            )
+        return IntentType.CHAT, (
+            "message did not match feature template generation keywords; routed to chat"
+        )
+
+    @staticmethod
+    def _rag_signal_in_message(request: AgenticRagRequest) -> bool:
+        if request.useRag is True:
+            return True
+        lower = request.message.lower()
+        return any(hint in lower for hint in _RAG_HINTS)
 
     @staticmethod
     def _should_use_rag(request: AgenticRagRequest) -> bool:

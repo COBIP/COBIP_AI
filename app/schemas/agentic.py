@@ -52,6 +52,52 @@ class AgenticRagTrace(BaseModel):
     references: list[Any] = Field(default_factory=list)
     inferredFields: dict[str, Any] = Field(default_factory=dict)
     latencyMs: int = Field(default=0, ge=0)
+    toolCandidates: list[str] = Field(
+        default_factory=list,
+        description="라우팅된 서비스·도구 후보 식별자",
+    )
+    intentReason: str = Field(
+        default="",
+        description="최상위 intent 분류 근거 (룰 기반 설명)",
+    )
+    handlerReason: str = Field(
+        default="",
+        description="선택된 실행 경로(handler) 근거",
+    )
+    ragContextAvailable: bool = Field(
+        default=False,
+        description="referenceContext.ragReferences 중 content 유효 항목 존재 여부(기능템플릿) 또는 챗 응답 RAG 근거 사용 여부",
+    )
+    ragReferenceCount: int = Field(
+        default=0,
+        ge=0,
+        description="select_usable_rag_references 기준 사용 가능 reference 개수(프롬프트 상한 적용 전·동일 필터)",
+    )
+    appliedReferenceCount: int = Field(
+        default=0,
+        ge=0,
+        description="기능템플릿 응답 appliedReferences 길이(챗 경로는 0)",
+    )
+    fallbackUsed: bool = Field(
+        default=False,
+        description="결과 source가 fallback이면 true",
+    )
+    source: str | None = Field(
+        default=None,
+        description="결과 LLM provider 요약(ollama, fallback 등)",
+    )
+    resultType: Literal["chat", "feature_template"] | None = Field(
+        default=None,
+        description="응답 resultType과 동일(추적 편의)",
+    )
+    routeDecision: str = Field(
+        default="",
+        description="intent → service 한 줄 요약",
+    )
+    executionMode: str = Field(
+        default="rule_based",
+        description="최상위 분류는 rule_based; 챗 하위는 result.agent.mode 반영 시 hybrid 등",
+    )
 
 
 class AgenticRagResponseData(BaseModel):
