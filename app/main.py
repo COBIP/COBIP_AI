@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import chat, evaluation, feature_template, grammar, health, rag
+from app.api.routes import agentic, chat, evaluation, feature_template, grammar, health, rag
 
 
 @asynccontextmanager
@@ -41,3 +41,4 @@ app.include_router(grammar.router)
 app.include_router(evaluation.router)
 app.include_router(rag.router)
 app.include_router(chat.router)
+app.include_router(agentic.router)

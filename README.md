@@ -77,7 +77,8 @@ AI는 그 본문을 참고하여 **추가 문제 생성, 채점, 오답 해설**
 | Retriever / 인덱싱 | ✅ `POST /ai/rag/retrieve` 검색, `POST /ai/rag/index` 인덱싱 (`/ai/chat` 미연동) |
 | Redis 클라이언트 헬퍼 | ✅ 구조 완성 (mock, `None` 반환) |
 | in-memory 캐시 + rate limit | ✅ 완료 (mock) |
-| FastAPI 라우터 (`/health`, `/ai/feature-template/*`, `/ai/grammar/*`, `/ai/quiz/*`, `/ai/mission/*`, `/ai/interview/*`, `/ai/code/*`, `/ai/rag/*`, `/ai/chat`) | ✅ 완료 |
+| FastAPI 라우터 (`/health`, `/ai/feature-template/*`, `/ai/grammar/*`, `/ai/quiz/*`, `/ai/mission/*`, `/ai/interview/*`, `/ai/code/*`, `/ai/rag/*`, `/ai/chat`, `/ai/agentic-rag/run`) | ✅ 완료 |
+| Agentic RAG 통합 진입점 (`POST /ai/agentic-rag/run`) | ✅ 완료 |
 | CORS 설정 | ✅ 완료 |
 | Dockerfile / docker-compose | ✅ 완료 (Ollama 포함) |
 | Ollama OpenAI-호환 LLM provider | ✅ 검증 완료 (`qwen2.5-coder:1.5b`) |
@@ -267,6 +268,31 @@ curl -X POST http://localhost:8007/ai/chat \
 ```
 
 선택 필드 `context`는 사용자가 직접 넣은 문맥이며, RAG 검색 블록과 함께 프롬프트에 포함될 수 있습니다.
+
+### Agentic RAG 통합 API (`POST /ai/agentic-rag/run`)
+
+챗봇 API와 기능템플릿 생성 API **위에** 자연어 단일 진입점을 둡니다. 기존 `POST /ai/chat`, `POST /ai/feature-template/generate`, `POST /ai/feature-template/regenerate-section`는 **그대로 유지**됩니다.
+
+**단순 RAG:** 질문 → 검색 → 답변  
+
+**현재 Agentic RAG:** 질문 → 자연어 의도 분류 → AgentRouter 서비스 선택 → 필요 시 RAG 검색 → `ChatService` 또는 `FeatureTemplateGenerator` 실행 → trace 포함 응답
+
+| intent | 실행 흐름 |
+| --- | --- |
+| `chat` | `AgentOrchestrator.run_chat` → handler → `ChatService` |
+| `feature_template_generate` | `FeatureTemplateGenerator.generate` |
+
+RAG는 **`RAG_ENABLED`** 와 **`useRag`** 또는 메시지 키워드(문서, 검색, 근거 등)에 따라 사용됩니다. chat 경로는 RAG 처리를 **chat handler에 위임**하고, feature template 경로는 검색 결과를 **`referenceContext.ragReferences`** 에 넣습니다.
+
+상세 요청/응답·trace 필드·curl 예시는 **[docs/agentic-rag-unified-api.md](docs/agentic-rag-unified-api.md)** 를 참고하세요.
+
+```bash
+curl -X POST http://localhost:8000/ai/agentic-rag/run \
+  -H "Content-Type: application/json" \
+  -d '{"message": "안녕", "useRag": false}'
+```
+
+---
 
 FastAPI만 `docker run`으로 실행하고 Ollama가 호스트에서 실행 중이면 다음 예시를 사용할 수 있습니다.
 
