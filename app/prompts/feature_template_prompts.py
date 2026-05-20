@@ -10,9 +10,16 @@ LLM 을 챗봇처럼 자유 응답시키지 않고, 백엔드 내부 JSON 생성
 __all__ = [
     "FEATURE_TEMPLATE_SYSTEM_PROMPT",
     "FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE",
+    "FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS",
     "FEATURE_TEMPLATE_SECTION_SYSTEM_PROMPT",
     "FEATURE_TEMPLATE_SECTION_USER_PROMPT_TEMPLATE",
 ]
+
+# 기능템플릿 생성 user 프롬프트에 삽입되는 RAG 안내 (제목 블록은 prompt_builder에서 붙인다).
+FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS = """\
+아래 내용은 현재 프로젝트의 공식문서, 기존 템플릿, 코드 예시, 요구사항 문서에서 검색된 참고 자료다.
+기능템플릿을 생성할 때 아래 근거를 우선 반영하라.
+근거에 없는 내용은 일반적인 베스트프랙티스로 보완하되, 확정된 프로젝트 정책처럼 단정하지 마라."""
 
 
 FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
@@ -156,7 +163,7 @@ FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
 생성 옵션:
 - includeCode: {includeCode}
 - includeMissions: {includeMissions}
-- includeInterview: {includeInterview}
+- includeInterview: {includeInterview}{ragContextSection}
 
 [참고 컨텍스트 (RAG / 외부 주입)]
 {referenceContext}

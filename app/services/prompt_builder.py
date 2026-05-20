@@ -4,9 +4,13 @@
 실제 LLM 호출은 별도 service에서 수행한다.
 """
 
+from __future__ import annotations
+
 import json
+from typing import Any
 
 from app.prompts.feature_template_prompts import (
+    FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS,
     FEATURE_TEMPLATE_SECTION_SYSTEM_PROMPT,
     FEATURE_TEMPLATE_SECTION_USER_PROMPT_TEMPLATE,
     FEATURE_TEMPLATE_SYSTEM_PROMPT,
@@ -14,7 +18,107 @@ from app.prompts.feature_template_prompts import (
 )
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
-__all__ = ["build_feature_template_prompt", "build_feature_template_section_prompt"]
+__all__ = [
+    "build_feature_template_prompt",
+    "build_feature_template_section_prompt",
+    "format_rag_references_for_feature_template_prompt",
+]
+
+_RAG_CONTEXT_HEADER = "[검색 근거 / RAG Context]"
+_MAX_RAG_REFERENCES = 5
+_MAX_RAG_CONTENT_CHARS = 1000
+
+
+def format_rag_references_for_feature_template_prompt(
+    references: list[Any],
+    *,
+    max_items: int = _MAX_RAG_REFERENCES,
+    max_content_chars: int = _MAX_RAG_CONTENT_CHARS,
+) -> str:
+    """RAG 검색 결과를 기능템플릿 user 프롬프트용 블록으로 포맷한다.
+
+    - 유효한 content가 있는 항목만 포함한다.
+    - 최대 max_items개 (기본 5, 운영에서는 3~5 범위 권장).
+    - content는 max_content_chars자로 자른다 (기본 1000).
+    - title / 출처(sourceType 또는 source) / score / 내용을 선택적으로 포함한다.
+    - references가 비어 있거나 유효 항목이 없으면 빈 문자열을 반환한다.
+    """
+
+    if not references or max_items < 1:
+        return ""
+
+    blocks: list[str] = []
+    for raw in references:
+        if len(blocks) >= max_items:
+            break
+        if not isinstance(raw, dict):
+            continue
+        content = raw.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        body = content.strip()
+        if len(body) > max_content_chars:
+            body = body[: max_content_chars - 1] + "…"
+
+        title = raw.get("title")
+        title_s = title.strip() if isinstance(title, str) and title.strip() else None
+
+        source_val = raw.get("sourceType")
+        if not (isinstance(source_val, str) and source_val.strip()):
+            alt = raw.get("source")
+            source_val = alt if isinstance(alt, str) and alt.strip() else None
+        else:
+            source_val = source_val.strip()
+
+        score = raw.get("score")
+        score_line: str | None = None
+        if isinstance(score, (int, float)):
+            score_line = str(score)
+
+        lines: list[str] = [f"{len(blocks) + 1}."]
+        if title_s:
+            lines.append(f"   제목: {title_s}")
+        if source_val:
+            lines.append(f"   출처: {source_val}")
+        if score_line is not None:
+            lines.append(f"   점수: {score_line}")
+        lines.append(f"   내용: {body}")
+        blocks.append("\n".join(lines))
+
+    if not blocks:
+        return ""
+
+    header = _RAG_CONTEXT_HEADER
+    intro = FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS
+    return f"{header}\n\n{intro}\n\n" + "\n\n".join(blocks)
+
+
+def _extract_rag_references_from_reference_context(
+    reference_context: dict[str, Any] | None,
+) -> list[Any]:
+    if not isinstance(reference_context, dict):
+        return []
+    raw = reference_context.get("ragReferences")
+    if raw is None:
+        raw = reference_context.get("rag_references")
+    if not isinstance(raw, list):
+        return []
+    return list(raw)
+
+
+def _reference_context_for_prompt_json(
+    reference_context: dict[str, Any] | None,
+    *,
+    omit_rag_references: bool,
+) -> dict[str, Any] | None:
+    """프롬프트 JSON 블록용 referenceContext. RAG 포맷 블록을 쓸 때는 ragReferences 중복을 줄인다."""
+
+    if not isinstance(reference_context, dict):
+        return reference_context
+    if not omit_rag_references:
+        return dict(reference_context)
+    out = {k: v for k, v in reference_context.items() if k not in ("ragReferences", "rag_references")}
+    return out
 
 
 def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> str:
@@ -32,9 +136,23 @@ def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> st
 
     framework_text = request.framework if request.framework else "(미지정)"
 
-    if request.referenceContext:
+    rag_refs = _extract_rag_references_from_reference_context(request.referenceContext)
+    rag_body = format_rag_references_for_feature_template_prompt(
+        rag_refs,
+        max_items=_MAX_RAG_REFERENCES,
+        max_content_chars=_MAX_RAG_CONTENT_CHARS,
+    )
+    rag_context_section = f"\n\n{rag_body}" if rag_body else ""
+
+    omit_rag_in_json = bool(rag_body)
+    ctx_for_json = _reference_context_for_prompt_json(
+        request.referenceContext,
+        omit_rag_references=omit_rag_in_json,
+    )
+
+    if ctx_for_json:
         reference_context_text = json.dumps(
-            request.referenceContext,
+            ctx_for_json,
             ensure_ascii=False,
             indent=2,
         )
@@ -49,6 +167,7 @@ def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> st
         includeCode=str(request.includeCode).lower(),
         includeMissions=str(request.includeMissions).lower(),
         includeInterview=str(request.includeInterview).lower(),
+        ragContextSection=rag_context_section,
         referenceContext=reference_context_text,
     )
 
