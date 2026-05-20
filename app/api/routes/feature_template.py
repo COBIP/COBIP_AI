@@ -21,6 +21,7 @@ def generate_feature_template(
         data={
             "template": result.template.model_dump(),
             "source": result.source,
+            "appliedReferences": result.appliedReferences,
         },
     )
 

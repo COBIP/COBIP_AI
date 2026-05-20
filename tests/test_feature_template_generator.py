@@ -44,6 +44,7 @@ def test_generate_fallback_has_all_sections(minimal_request: FeatureTemplateGene
     data = result.template.model_dump()
     assert set(data.keys()) == _CANONICAL_KEYS
     assert result.source == "fallback"
+    assert result.appliedReferences == []
 
 
 def test_generate_success_path_uses_normalizer(
@@ -75,6 +76,7 @@ def test_generate_success_path_uses_normalizer(
     result = gen.generate(minimal_request)
     assert result.source == "ollama"
     assert set(result.template.model_dump().keys()) == _CANONICAL_KEYS
+    assert result.appliedReferences == []
 
 
 def test_regenerate_section_success_path_uses_normalizer(

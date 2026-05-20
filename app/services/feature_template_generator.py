@@ -41,7 +41,7 @@ from app.services.feature_template_normalizer import FeatureTemplateNormalizer
 from app.services.feature_template_section_resolve import alternate_keys_for_section
 from app.services.llm_service import LLMService
 from app.services.prompt_builder import (
-    build_feature_template_prompt,
+    build_feature_template_prompt_with_applied_rags,
     build_feature_template_section_prompt,
 )
 
@@ -90,7 +90,7 @@ class FeatureTemplateGenerator:
         self._llm_service = llm_service or LLMService()
 
     def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateGenerateResult:
-        prompt = build_feature_template_prompt(request)
+        prompt, applied_refs = build_feature_template_prompt_with_applied_rags(request)
 
         try:
             llm_result = self._llm_service.generate_json(prompt)
@@ -115,6 +115,7 @@ class FeatureTemplateGenerator:
             return FeatureTemplateGenerateResult(
                 template=FeatureTemplateData(**normalized),
                 source="fallback",
+                appliedReferences=applied_refs,
             )
 
         logger.info(
@@ -124,6 +125,7 @@ class FeatureTemplateGenerator:
         return FeatureTemplateGenerateResult(
             template=template,
             source=self._llm_service.provider,
+            appliedReferences=applied_refs,
         )
 
     def regenerate_section(
