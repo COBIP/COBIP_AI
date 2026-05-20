@@ -23,6 +23,7 @@ __all__ = [
     "build_feature_template_prompt",
     "build_feature_template_prompt_with_applied_rags",
     "build_feature_template_section_prompt",
+    "extract_raw_rag_references_from_reference_context",
     "format_rag_references_for_feature_template_prompt",
     "select_usable_rag_references",
 ]
@@ -164,6 +165,14 @@ def format_rag_references_for_feature_template_prompt(
 
     selected = select_usable_rag_references(references, max_items=max_items)
     return _format_rag_block_from_selected(selected, max_content_chars=max_content_chars)
+
+
+def extract_raw_rag_references_from_reference_context(
+    reference_context: dict[str, Any] | None,
+) -> list[Any]:
+    """referenceContext에서 ragReferences / rag_references 원본 리스트를 반환한다."""
+
+    return _extract_rag_references_from_reference_context(reference_context)
 
 
 def _extract_rag_references_from_reference_context(
