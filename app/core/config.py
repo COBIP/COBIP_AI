@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 4096
     LLM_TIMEOUT_SECONDS: int = 60
+    FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS: int = 120
 
     CACHE_TTL_SECONDS: int = 3600
     RATE_LIMIT_PER_MINUTE: int = 30

@@ -45,7 +45,13 @@ class LLMService:
             {"role": "user", "content": user_prompt},
         ]
 
-    def generate_text(self, prompt: str, system_prompt: str | None = None) -> str:
+    def generate_text(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        *,
+        timeout_seconds: int | float | None = None,
+    ) -> str:
         """단일 prompt 로 텍스트 응답을 받는다.
 
         OLLAMA_BASE_URL 미설정 시 mock 텍스트를 반환한다.
@@ -66,10 +72,15 @@ class LLMService:
             system_prompt=system,
             user_prompt=prompt,
         )
-        result = self.call_llm(messages)
+        result = self.call_llm(messages, timeout_seconds=timeout_seconds)
         return self._extract_content(result)
 
-    def generate_json(self, prompt: str) -> dict:
+    def generate_json(
+        self,
+        prompt: str,
+        *,
+        timeout_seconds: int | float | None = None,
+    ) -> dict:
         """단일 prompt 로 JSON 응답을 받아 dict 로 반환한다.
 
         OLLAMA_BASE_URL 미설정 시 mock dict 를 반환한다.
@@ -78,10 +89,15 @@ class LLMService:
         if not settings.OLLAMA_BASE_URL:
             return self._mock_json(prompt)
 
-        text = self.generate_text(prompt)
+        text = self.generate_text(prompt, timeout_seconds=timeout_seconds)
         return self._parse_json_object(text)
 
-    def call_llm(self, messages: list[dict]) -> dict:
+    def call_llm(
+        self,
+        messages: list[dict],
+        *,
+        timeout_seconds: int | float | None = None,
+    ) -> dict:
         """OpenAI-호환 /chat/completions 엔드포인트를 호출한다.
 
         OLLAMA_BASE_URL 미설정 시 mock OpenAI-호환 응답을 반환한다.
@@ -100,20 +116,22 @@ class LLMService:
             "max_tokens": settings.LLM_MAX_TOKENS,
         }
 
+        timeout = timeout_seconds if timeout_seconds is not None else settings.LLM_TIMEOUT_SECONDS
+
         logger.info(
             "provider=%s mode=llm_call model=%s",
             self.provider,
             model_name,
         )
         try:
-            with httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
+            with httpx.Client(timeout=timeout) as client:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
                 logger.info("provider=%s mode=llm_ok", self.provider)
                 return response.json()
         except httpx.TimeoutException as exc:
             raise RuntimeError(
-                f"LLM 호출 타임아웃 ({settings.LLM_TIMEOUT_SECONDS}s 초과)"
+                f"LLM 호출 타임아웃 ({timeout}s 초과)"
             ) from exc
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
@@ -150,6 +168,22 @@ class LLMService:
     def _parse_json_object(text: str) -> dict:
         cleaned = re.sub(r"```(?:json)?\s*", "", text, flags=re.IGNORECASE)
         cleaned = cleaned.replace("```", "").strip()
+
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            candidate = cleaned[start : end + 1]
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if not isinstance(parsed, dict):
+                    raise RuntimeError(
+                        "LLM 응답 JSON 타입이 dict 가 아닙니다. "
+                        f"실제 타입: {type(parsed).__name__}"
+                    )
+                return parsed
 
         decoder = json.JSONDecoder()
         for index, char in enumerate(cleaned):

@@ -55,7 +55,7 @@ def test_applied_references_populated_when_rag_present(monkeypatch: pytest.Monke
         referenceContext={"ragReferences": [_MOCK_REF]},
     )
     gen = FeatureTemplateGenerator()
-    monkeypatch.setattr(gen._llm_service, "generate_json", lambda _p: _minimal_llm_json())
+    monkeypatch.setattr(gen._llm_service, "generate_json", lambda _p, **_kw: _minimal_llm_json())
 
     result = gen.generate(req)
     assert len(result.appliedReferences) == 1
@@ -78,7 +78,11 @@ def test_applied_references_empty_without_rag(monkeypatch: pytest.MonkeyPatch) -
         includeInterview=False,
     )
     gen = FeatureTemplateGenerator()
-    monkeypatch.setattr(gen._llm_service, "generate_json", lambda _p: _minimal_llm_json("smoke"))
+    monkeypatch.setattr(
+        gen._llm_service,
+        "generate_json",
+        lambda _p, **_kw: _minimal_llm_json("smoke"),
+    )
 
     result = gen.generate(req)
     assert result.appliedReferences == []
