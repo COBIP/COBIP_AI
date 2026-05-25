@@ -485,6 +485,200 @@ def _default_login_requirements(
     ]
 
 
+_LOGIN_GENERIC_ENDPOINTS: frozenset[str] = frozenset(
+    {
+        "",
+        "/",
+        "/feature",
+        "/api/feature",
+        "/api/test",
+        "/api/example",
+        "/api/login",
+    }
+)
+
+
+def _is_generic_endpoint(value: object) -> bool:
+    text = _coerce_to_string(value).strip()
+    if not text:
+        return True
+    return text.lower() in _LOGIN_GENERIC_ENDPOINTS
+
+
+def _login_api_spec_template() -> dict[str, Any]:
+    return {
+        "apiName": "로그인 API",
+        "method": "POST",
+        "endpoint": "/api/auth/login",
+        "description": "이메일 또는 사용자명과 비밀번호를 검증해 accessToken을 발급한다.",
+        "requestBody": {
+            "email": "user@example.com",
+            "password": "password123!",
+        },
+        "responseBody": {
+            "accessToken": "jwt-access-token",
+            "tokenType": "Bearer",
+            "user": {"id": 1, "email": "user@example.com"},
+        },
+        "status": 200,
+    }
+
+
+def _default_login_learning_goals() -> list[str]:
+    return [
+        "로그인 요청 DTO와 응답 DTO의 역할을 이해한다.",
+        "입력값 검증, 사용자 조회, 비밀번호 검증 흐름을 계층별로 설명한다.",
+        "인증 성공 시 토큰을 발급하고 실패 시 일관된 오류 응답을 반환하는 방식을 익힌다.",
+    ]
+
+
+def _default_login_basic_questions() -> list[dict[str, Any]]:
+    return [
+        {
+            "questionId": "Q-login-1",
+            "type": "short_answer",
+            "question": "로그인 API에서 이메일과 비밀번호를 먼저 검증해야 하는 이유를 설명하시오.",
+            "choices": None,
+            "answer": "잘못된 요청을 인증 로직으로 넘기지 않고 명확한 오류 응답을 반환하기 위해서다.",
+            "explanation": "입력값 검증을 먼저 수행하면 불필요한 DB 조회를 줄이고 실패 원인을 안정적으로 처리할 수 있다.",
+            "relatedSection": "requirements",
+            "difficulty": "beginner",
+        },
+        {
+            "questionId": "Q-login-2",
+            "type": "fill_blank",
+            "question": "로그인 성공 시 서버는 보통 accessToken과 tokenType을 포함한 ____를 반환한다.",
+            "choices": None,
+            "answer": "응답 DTO",
+            "explanation": "응답 DTO는 클라이언트가 사용할 토큰과 사용자 요약 정보를 안정된 구조로 전달한다.",
+            "relatedSection": "apiSpec",
+            "difficulty": "beginner",
+        },
+        {
+            "questionId": "Q-login-3",
+            "type": "short_answer",
+            "question": "비밀번호를 평문으로 비교하거나 저장하면 안 되는 이유를 설명하시오.",
+            "choices": None,
+            "answer": "유출 시 원문 비밀번호가 노출되므로 BCrypt 같은 해시로 저장하고 검증해야 한다.",
+            "explanation": "단방향 해시와 솔트를 사용하면 저장소 유출 상황에서도 원문 복구 위험을 낮출 수 있다.",
+            "relatedSection": "requirements",
+            "difficulty": "beginner",
+        },
+    ]
+
+
+def _is_poor_choices(value: object) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, list):
+        return True
+    stripped = [_coerce_to_string(item).strip() for item in value]
+    if stripped == ["A", "B", "C", "D"]:
+        return True
+    return bool(stripped) and all(len(item) <= 2 for item in stripped)
+
+
+def _is_poor_short_text(value: object) -> bool:
+    text = _coerce_to_string(value).strip()
+    return text in {"", "정답", "설명"}
+
+
+def _ensure_login_quality_baseline(
+    normalized: dict[str, Any],
+    request: FeatureTemplateGenerateRequest | None,
+    changed_fields: list[str],
+) -> None:
+    if request is None or not _is_login_feature_request(request):
+        return
+
+    overview = normalized.get("overview")
+    if isinstance(overview, dict) and _str_list_effectively_empty(overview.get("learningGoals")):
+        overview["learningGoals"] = _default_login_learning_goals()
+        changed_fields.append("overview.learningGoals[login-default]")
+
+    login_api = _login_api_spec_template()
+    api_specs = normalized.get("apiSpec")
+    if not isinstance(api_specs, list) or not api_specs:
+        normalized["apiSpec"] = [dict(login_api)]
+        changed_fields.append("apiSpec[login-default]")
+    else:
+        fixed_specs: list[dict[str, Any]] = []
+        for index, raw_item in enumerate(api_specs):
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            if _is_generic_endpoint(item.get("endpoint")):
+                item["endpoint"] = login_api["endpoint"]
+                changed_fields.append(f"apiSpec[{index}].endpoint")
+            if _is_missing_or_blank_str(item.get("apiName")):
+                item["apiName"] = login_api["apiName"]
+                changed_fields.append(f"apiSpec[{index}].apiName")
+            if _is_missing_or_blank_str(item.get("method")):
+                item["method"] = "POST"
+                changed_fields.append(f"apiSpec[{index}].method")
+            if _is_missing_or_blank_str(item.get("description")):
+                item["description"] = login_api["description"]
+                changed_fields.append(f"apiSpec[{index}].description")
+            if not isinstance(item.get("requestBody"), dict) or not item.get("requestBody"):
+                item["requestBody"] = dict(login_api["requestBody"])
+                changed_fields.append(f"apiSpec[{index}].requestBody")
+            if not isinstance(item.get("responseBody"), dict) or not item.get("responseBody"):
+                item["responseBody"] = dict(login_api["responseBody"])
+                changed_fields.append(f"apiSpec[{index}].responseBody")
+            fixed_specs.append(item)
+        normalized["apiSpec"] = fixed_specs or [dict(login_api)]
+
+    reqs = normalized.get("requirements")
+    if not isinstance(reqs, list):
+        reqs = []
+    fixed_reqs: list[dict[str, Any]] = [dict(item) for item in reqs if isinstance(item, dict)]
+    defaults = _default_login_requirements(request)
+    while len(fixed_reqs) < 3:
+        fixed_reqs.append(dict(defaults[len(fixed_reqs)]))
+        changed_fields.append("requirements[login+pad]")
+    for index, item in enumerate(fixed_reqs):
+        if _is_generic_endpoint(item.get("relatedScreenOrApi")):
+            item["relatedScreenOrApi"] = "POST /api/auth/login"
+            changed_fields.append(f"requirements[{index}].relatedScreenOrApi")
+    normalized["requirements"] = fixed_reqs
+
+    questions = normalized.get("basicQuestions")
+    if not isinstance(questions, list):
+        questions = []
+    fixed_questions: list[dict[str, Any]] = [
+        dict(item) for item in questions if isinstance(item, dict)
+    ]
+    question_defaults = _default_login_basic_questions()
+    while len(fixed_questions) < 3:
+        fixed_questions.append(dict(question_defaults[len(fixed_questions)]))
+        changed_fields.append("basicQuestions[login+pad]")
+    for index, item in enumerate(fixed_questions):
+        default = question_defaults[min(index, len(question_defaults) - 1)]
+        if _is_poor_choices(item.get("choices")):
+            item["type"] = default["type"]
+            item["choices"] = default["choices"]
+            changed_fields.append(f"basicQuestions[{index}].choices")
+        if _is_poor_short_text(item.get("answer")):
+            item["answer"] = default["answer"]
+            changed_fields.append(f"basicQuestions[{index}].answer")
+        if _is_poor_short_text(item.get("explanation")):
+            item["explanation"] = default["explanation"]
+            changed_fields.append(f"basicQuestions[{index}].explanation")
+        if _is_missing_or_blank_str(item.get("question")):
+            item["question"] = default["question"]
+            changed_fields.append(f"basicQuestions[{index}].question")
+        if _is_missing_or_blank_str(item.get("type")):
+            item["type"] = default["type"]
+            changed_fields.append(f"basicQuestions[{index}].type")
+        if _is_missing_or_blank_str(item.get("relatedSection")):
+            item["relatedSection"] = default["relatedSection"]
+            changed_fields.append(f"basicQuestions[{index}].relatedSection")
+        if _is_missing_or_blank_str(item.get("difficulty")):
+            item["difficulty"] = default["difficulty"]
+            changed_fields.append(f"basicQuestions[{index}].difficulty")
+    normalized["basicQuestions"] = fixed_questions
+
+
 def _ensure_final_login_defense(
     normalized: dict[str, Any],
     request: FeatureTemplateGenerateRequest | None,
@@ -1132,6 +1326,8 @@ def _apply_post_normalize_quality(
                 iv_list.append(dup)
                 changed_fields.append("interviewQuestions[+pad]")
             normalized["interviewQuestions"] = iv_list
+
+    _ensure_login_quality_baseline(normalized, request, changed_fields)
 
     nxt = normalized.get("nextRecommendations")
     if not isinstance(nxt, list):

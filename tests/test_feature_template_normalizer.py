@@ -64,7 +64,7 @@ def test_snake_case_aliases(sample_request: FeatureTemplateGenerateRequest) -> N
     }
     out = FeatureTemplateNormalizer.normalize(raw, req)
     assert out["apiSpec"][0]["apiName"] == "x"
-    assert out["basicQuestions"] == []
+    assert len(out["basicQuestions"]) >= 3
     assert out["interviewQuestions"] == []
     assert len(out["nextRecommendations"]) >= 3
 
@@ -663,4 +663,134 @@ def test_final_defense_adds_request_and_response_when_missing_only_controller_se
     assert "LoginRequest.java" in names
     assert "LoginResponse.java" in names
     assert all("/" not in str(n) for n in names)
+    FeatureTemplateData(**out)
+
+
+def test_login_api_endpoint_and_body_are_normalized(sample_request: FeatureTemplateGenerateRequest) -> None:
+    req = sample_request.model_copy(
+        update={"includeCode": False, "includeMissions": False, "includeInterview": False}
+    )
+    raw = {
+        "apiSpec": [
+            {
+                "apiName": "",
+                "method": "POST",
+                "endpoint": "/api/feature",
+                "description": "",
+                "requestBody": {},
+                "responseBody": {},
+                "status": 200,
+            }
+        ]
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, req)
+    api = out["apiSpec"][0]
+    assert api["endpoint"] == "/api/auth/login"
+    assert "email" in api["requestBody"]
+    assert "password" in api["requestBody"]
+    assert "accessToken" in api["responseBody"]
+    assert out["codeFiles"] == []
+    assert out["missions"] == []
+    assert out["interviewQuestions"] == []
+    FeatureTemplateData(**out)
+
+
+def test_login_requirement_related_screen_or_api_is_normalized(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "requirements": [
+            {
+                "requirementId": "R-001",
+                "name": "로그인",
+                "description": "로그인한다.",
+                "inputValue": "email/password",
+                "processCondition": "검증",
+                "successResult": "성공",
+                "failureResult": "실패",
+                "priority": "HIGH",
+                "relatedScreenOrApi": "/api/feature",
+            }
+        ]
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert len(out["requirements"]) >= 3
+    assert out["requirements"][0]["relatedScreenOrApi"] == "POST /api/auth/login"
+    FeatureTemplateData(**out)
+
+
+def test_login_basic_questions_are_padded_and_poor_values_fixed(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "basicQuestions": [
+            {
+                "questionId": "Q-001",
+                "type": "multiple_choice",
+                "question": "로그인 질문",
+                "choices": ["A", "B", "C", "D"],
+                "answer": "",
+                "explanation": "설명",
+                "relatedSection": "",
+                "difficulty": "",
+            }
+        ]
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert len(out["basicQuestions"]) >= 3
+    first = out["basicQuestions"][0]
+    assert first["choices"] is None
+    assert first["answer"]
+    assert first["answer"] != "정답"
+    assert first["explanation"]
+    assert first["explanation"] != "설명"
+    assert first["relatedSection"]
+    assert first["difficulty"] == "beginner"
+    FeatureTemplateData(**out)
+
+
+def test_login_overview_learning_goals_are_filled(sample_request: FeatureTemplateGenerateRequest) -> None:
+    raw = {"overview": {"featureName": "로그인", "learningGoals": []}}
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    assert len(out["overview"]["learningGoals"]) >= 2
+    assert any("토큰" in goal or "인증" in goal for goal in out["overview"]["learningGoals"])
+    FeatureTemplateData(**out)
+
+
+def test_login_quality_normalization_preserves_disabled_optional_sections(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    req = sample_request.model_copy(
+        update={"includeCode": False, "includeMissions": False, "includeInterview": False}
+    )
+    raw = {
+        "codeFiles": [{"fileName": "X.java", "role": "x", "language": "java", "content": "x"}],
+        "missions": [
+            {
+                "missionId": "M-1",
+                "title": "x",
+                "description": "x",
+                "missionType": "implementation",
+                "requirements": [],
+                "successCriteria": [],
+                "relatedRequirements": [],
+                "difficulty": "beginner",
+            }
+        ],
+        "interviewQuestions": [
+            {
+                "questionId": "I-1",
+                "question": "x",
+                "keyPoints": [],
+                "sampleAnswer": "x",
+                "relatedSection": "flow",
+            }
+        ],
+        "apiSpec": [{"endpoint": "/api/feature", "status": 200}],
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, req)
+    assert out["codeFiles"] == []
+    assert out["missions"] == []
+    assert out["interviewQuestions"] == []
+    assert out["apiSpec"][0]["endpoint"] == "/api/auth/login"
     FeatureTemplateData(**out)
