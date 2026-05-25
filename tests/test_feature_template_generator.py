@@ -6,6 +6,7 @@ import pytest
 
 from app.models.enums import DifficultyLevel
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
+from app.core.config import settings
 from app.services.feature_template_generator import FeatureTemplateGenerator
 
 _CANONICAL_KEYS = frozenset(
@@ -51,8 +52,10 @@ def test_generate_success_path_uses_normalizer(
     minimal_request: FeatureTemplateGenerateRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     gen = FeatureTemplateGenerator()
+    seen: dict[str, object] = {}
 
-    def fake_json(_prompt: str) -> dict:
+    def fake_json(_prompt: str, **kwargs: object) -> dict:
+        seen.update(kwargs)
         return {
             "overview": {
                 "featureName": "smoke",
@@ -77,6 +80,7 @@ def test_generate_success_path_uses_normalizer(
     assert result.source == "ollama"
     assert set(result.template.model_dump().keys()) == _CANONICAL_KEYS
     assert result.appliedReferences == []
+    assert seen["timeout_seconds"] == settings.FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS
 
 
 def test_regenerate_section_success_path_uses_normalizer(
@@ -86,7 +90,7 @@ def test_regenerate_section_success_path_uses_normalizer(
 
     gen = FeatureTemplateGenerator()
 
-    def fake_json(_prompt: str) -> dict:
+    def fake_json(_prompt: str, **_kwargs: object) -> dict:
         return {
             "requirements": [
                 {
@@ -126,7 +130,7 @@ def test_regenerate_section_accepts_llm_snake_case_section_key(
 
     gen = FeatureTemplateGenerator()
 
-    def fake_json(_prompt: str) -> dict:
+    def fake_json(_prompt: str, **_kwargs: object) -> dict:
         return {
             "api_spec": [
                 {
@@ -153,3 +157,36 @@ def test_regenerate_section_accepts_llm_snake_case_section_key(
     assert result.section == "apiSpec"
     assert len(result.content) == 1
     assert result.content[0]["apiName"] == "x"
+
+
+def test_generate_uses_feature_template_timeout(
+    minimal_request: FeatureTemplateGenerateRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gen = FeatureTemplateGenerator()
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS", 123)
+
+    gen._llm_service.generate_json = MagicMock(
+        return_value={
+            "overview": {
+                "featureName": "smoke",
+                "purpose": "p",
+                "useCases": [],
+                "resultDescription": "r",
+                "techStack": [],
+                "learningGoals": [],
+            },
+            "requirements": [],
+            "flow": {"steps": [], "layers": []},
+            "apiSpec": [],
+            "codeFiles": [],
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+    )
+
+    gen.generate(minimal_request)
+
+    assert gen._llm_service.generate_json.call_args.kwargs["timeout_seconds"] == 123

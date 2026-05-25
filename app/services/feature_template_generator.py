@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.models.enums import DifficultyLevel, QuestionType
 from app.schemas.feature_template import (
     ApiSpecSchema,
@@ -93,7 +94,10 @@ class FeatureTemplateGenerator:
         prompt, applied_refs = build_feature_template_prompt_with_applied_rags(request)
 
         try:
-            llm_result = self._llm_service.generate_json(prompt)
+            llm_result = self._llm_service.generate_json(
+                prompt,
+                timeout_seconds=settings.FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS,
+            )
             normalized_dict = FeatureTemplateNormalizer.normalize(llm_result, request)
             template = FeatureTemplateData(**normalized_dict)
         except (RuntimeError, ValidationError, TypeError, ValueError) as exc:
@@ -160,7 +164,10 @@ class FeatureTemplateGenerator:
         )
 
         try:
-            llm_result = self._llm_service.generate_json(prompt)
+            llm_result = self._llm_service.generate_json(
+                prompt,
+                timeout_seconds=settings.FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS,
+            )
             if not isinstance(llm_result, dict) or llm_result.get("mock"):
                 raise RuntimeError("LLM unavailable or mock JSON payload")
 
