@@ -79,7 +79,8 @@ def test_prompt_forbids_placeholder_dummy_phrases() -> None:
     text = build_feature_template_prompt(_req())
     assert "더미" in text or "준비용" in text or "플레이스홀더" in text
     assert "실제 동작 가능한 코드 문자열" in text
-    assert "filePath" in text and "LoginService.java" in text
+    assert "LoginService.java" in text
+    assert '"codeFiles": []' in text
 
 
 def test_prompt_quality_minimums() -> None:
@@ -90,7 +91,8 @@ def test_prompt_quality_minimums() -> None:
 
 def test_prompt_initial_generation_lightweight_policy() -> None:
     text = build_feature_template_prompt(_req())
-    assert "전체 구조를 빠르게 보여주는 템플릿" in text
+    assert "skeleton-first" in text
+    assert "전체 구조만 빠르게" in text
     assert "regenerate-section" in text
     assert "requirements: 정확히 3개" in text
     assert "steps 정확히 5개" in text
@@ -100,19 +102,19 @@ def test_prompt_initial_generation_lightweight_policy() -> None:
 
 def test_prompt_limits_initial_codefiles_volume() -> None:
     text = build_feature_template_prompt(_req(framework="Spring Boot"))
-    assert "최대 4개" in text
-    assert "파일당 content 20~40줄 이내" in text
+    assert "상세 코드를 만들지 않는다" in text
+    assert "최대 4개 짧은 stub" in text
     assert "LoginController.java" in text
     assert "LoginService.java" in text
     assert "LoginRequest.java" in text
     assert "LoginResponse.java" in text
-    assert "보조 파일은 생략" in text
+    assert "상세 코드는 regenerate-section에서 생성" in text
 
 
 def test_prompt_limits_optional_sections_for_initial_generation() -> None:
     text = build_feature_template_prompt(_req())
-    assert "missions: includeMissions=true. 정확히 2개만 생성" in text
-    assert "interviewQuestions: includeInterview=true. 정확히 3개만 생성" in text
+    assert "missions: includeMissions=true여도 최초 generate에서는 []를 우선 반환" in text
+    assert "interviewQuestions: includeInterview=true여도 최초 generate에서는 []를 우선 반환" in text
     assert "nextRecommendations: 정확히 3개만 추천" in text
 
 
@@ -131,7 +133,7 @@ def test_prompt_keeps_empty_array_rules_when_flags_false() -> None:
 def test_prompt_maps_conceptual_fields_to_schema_without_extra_keys() -> None:
     """교육용 개념(goal/hints/keywords 등)은 스키마 필드에 녹이라는 지시가 포함된다."""
     text = build_feature_template_prompt(_req())
-    assert "미션 목표:" in text
+    assert "상세 실습 미션은 regenerate-section에서 생성" in text
     assert "goal/hints/keywords/title" in text
     assert "nextFeatureName 단독 key" in text
 
@@ -170,8 +172,8 @@ def test_prompt_7_4_content_quality_minimums_and_api_json() -> None:
     assert "requirements: 정확히 3개" in text
     assert "basicQuestions: 정확히 3개" in text
     assert "nextRecommendations: 정확히 3개" in text
-    assert "missions: includeMissions=true. 정확히 2개" in text
-    assert "interviewQuestions: includeInterview=true. 정확히 3개" in text
+    assert "missions: includeMissions=true여도 최초 generate에서는 []" in text
+    assert "interviewQuestions: includeInterview=true여도 최초 generate에서는 []" in text
     assert "requestBody/responseBody는 필드 예시가 있는 JSON 객체" in text
     assert "goal/hints/keywords/title" in text
 
@@ -207,3 +209,16 @@ def test_prompt_omits_interview_details_when_include_interview_false() -> None:
     assert "sampleAnswer" not in text
     assert "keyPoints" not in text
     assert '"interviewQuestions": []' in text
+
+
+def test_prompt_skeleton_first_keeps_heavy_sections_empty_even_when_flags_true() -> None:
+    text = build_feature_template_prompt(_req())
+    assert '"codeFiles": []' in text
+    assert '"missions": []' in text
+    assert '"interviewQuestions": []' in text
+    assert "regenerate-section" in text
+
+
+def test_prompt_length_stays_small_with_skeleton_first_full_options() -> None:
+    text = build_feature_template_prompt(_req(framework="Spring Boot"))
+    assert len(text) < 5000

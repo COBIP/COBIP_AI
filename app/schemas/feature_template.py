@@ -197,6 +197,18 @@ class FeatureTemplateGenerateResult(BaseModel):
         default_factory=list,
         description="프롬프트에 주입된 RAG reference 요약(실제 LLM 인용 여부와 무관)",
     )
+    generationMode: Literal["skeleton", "llm_full", "fallback", "section_regenerated"] = Field(
+        default="skeleton",
+        description="최초 generate 생성 전략. 12차부터 기본값은 skeleton-first",
+    )
+    skeletonFirst: bool = Field(
+        default=True,
+        description="최초 generate가 빠른 기본 구조를 먼저 반환하는 전략인지 여부",
+    )
+    deferredSections: list[str] = Field(
+        default_factory=lambda: ["codeFiles", "missions", "interviewQuestions"],
+        description="최초 generate에서 상세 생성을 regenerate-section으로 미루는 섹션",
+    )
 
 
 class FeatureTemplateGenerateResponse(BaseModel):
@@ -206,15 +218,22 @@ class FeatureTemplateGenerateResponse(BaseModel):
         default_factory=list,
         description="프롬프트에 주입된 RAG reference 요약",
     )
+    generationMode: Literal["skeleton", "llm_full", "fallback", "section_regenerated"] = "skeleton"
+    skeletonFirst: bool = True
+    deferredSections: list[str] = Field(
+        default_factory=lambda: ["codeFiles", "missions", "interviewQuestions"]
+    )
 
 
 class FeatureTemplateRegenerateSectionResult(BaseModel):
     section: str
     content: dict[str, Any] | list[Any]
     source: Literal["ollama", "fallback"]
+    generationMode: Literal["skeleton", "llm_full", "fallback", "section_regenerated"] = "section_regenerated"
 
 
 class FeatureTemplateRegenerateSectionResponse(BaseModel):
     section: str
     content: dict[str, Any] | list[Any]
     source: Literal["ollama", "fallback"]
+    generationMode: Literal["skeleton", "llm_full", "fallback", "section_regenerated"] = "section_regenerated"

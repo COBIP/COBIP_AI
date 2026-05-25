@@ -98,6 +98,18 @@ class AgenticRagTrace(BaseModel):
         default="rule_based",
         description="최상위 분류는 rule_based; 챗 하위는 result.agent.mode 반영 시 hybrid 등",
     )
+    generationMode: str | None = Field(
+        default=None,
+        description="기능템플릿 생성 전략(skeleton, fallback, section_regenerated 등)",
+    )
+    skeletonFirst: bool = Field(
+        default=False,
+        description="최초 generate가 skeleton-first 전략으로 실행되었는지 여부",
+    )
+    deferredSections: list[str] = Field(
+        default_factory=list,
+        description="최초 generate에서 상세 생성을 regenerate-section으로 미룬 섹션",
+    )
 
 
 class AgenticRagResponseData(BaseModel):

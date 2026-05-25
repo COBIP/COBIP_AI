@@ -209,7 +209,7 @@ def _build_initial_generation_section_instructions(
     """include flags에 따라 최초 generate용 섹션 지시만 짧게 조립한다."""
 
     lines = [
-        "- 최초 generate는 전체 구조를 빠르게 보여주는 템플릿이다. 상세 보강은 regenerate-section에서 수행한다.",
+        "- 최초 generate는 skeleton-first 전략이다. 전체 구조만 빠르게 보여주고 상세 보강은 regenerate-section에서 수행한다.",
         "- overview: featureName, purpose, useCases, resultDescription, techStack, learningGoals를 짧게 채운다.",
         "- requirements: 정확히 3개. 입력, 검증, 성공/실패/보안 관점으로 나눈다.",
         "- flow: steps 정확히 5개, layers는 핵심 계층만 간결히 작성한다.",
@@ -220,9 +220,10 @@ def _build_initial_generation_section_instructions(
 
     if request.includeCode:
         lines.append(
-            "- codeFiles: includeCode=true. 최대 4개, 파일당 content 20~40줄 이내. "
+            "- codeFiles: includeCode=true여도 최초 generate에서는 상세 코드를 만들지 않는다. "
+            "가능하면 []를 반환하고, 꼭 필요하면 최대 4개 짧은 stub만 작성한다. "
             "Spring Boot 로그인은 LoginController.java, LoginService.java, "
-            "LoginRequest.java, LoginResponse.java 4개를 우선하고 보조 파일은 생략한다."
+            "LoginRequest.java, LoginResponse.java 4개 이름만 우선하며 상세 코드는 regenerate-section에서 생성한다."
         )
     else:
         lines.append(
@@ -232,8 +233,8 @@ def _build_initial_generation_section_instructions(
 
     if request.includeMissions:
         lines.append(
-            "- missions: includeMissions=true. 정확히 2개만 생성한다. "
-            "미션 목표는 description에 짧게 쓰고, 힌트는 requirements 배열에 넣는다."
+            "- missions: includeMissions=true여도 최초 generate에서는 []를 우선 반환한다. "
+            "상세 실습 미션은 regenerate-section에서 생성한다."
         )
     else:
         lines.append(
@@ -243,8 +244,8 @@ def _build_initial_generation_section_instructions(
 
     if request.includeInterview:
         lines.append(
-            "- interviewQuestions: includeInterview=true. 정확히 3개만 생성한다. "
-            "keyPoints와 sampleAnswer는 짧게 쓴다."
+            "- interviewQuestions: includeInterview=true여도 최초 generate에서는 []를 우선 반환한다. "
+            "상세 핵심점검/면접 문항은 regenerate-section에서 생성한다."
         )
     else:
         lines.append(
@@ -329,42 +330,6 @@ def _build_initial_generation_json_skeleton(
             }
         ],
     }
-
-    if request.includeCode:
-        skeleton["codeFiles"] = [
-            {
-                "fileName": "LoginController.java",
-                "filePath": "src/main/java/com/example/auth/LoginController.java",
-                "role": "Controller",
-                "language": request.language,
-                "content": "짧은 핵심 코드",
-            }
-        ]
-
-    if request.includeMissions:
-        skeleton["missions"] = [
-            {
-                "missionId": "M-001",
-                "title": "",
-                "description": "미션 목표: 기능 흐름을 확장한다.",
-                "missionType": "implementation",
-                "requirements": [],
-                "successCriteria": [],
-                "relatedRequirements": [],
-                "difficulty": request.level.value,
-            }
-        ]
-
-    if request.includeInterview:
-        skeleton["interviewQuestions"] = [
-            {
-                "questionId": "IQ-001",
-                "question": "",
-                "keyPoints": [],
-                "sampleAnswer": "",
-                "relatedSection": "flow",
-            }
-        ]
 
     return json.dumps(skeleton, ensure_ascii=False, indent=2)
 

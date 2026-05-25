@@ -46,6 +46,9 @@ def test_generate_fallback_has_all_sections(minimal_request: FeatureTemplateGene
     assert set(data.keys()) == _CANONICAL_KEYS
     assert result.source == "fallback"
     assert result.appliedReferences == []
+    assert result.generationMode == "fallback"
+    assert result.skeletonFirst is True
+    assert result.deferredSections == ["codeFiles", "missions", "interviewQuestions"]
 
 
 def test_generate_success_path_uses_normalizer(
@@ -80,6 +83,9 @@ def test_generate_success_path_uses_normalizer(
     assert result.source == "ollama"
     assert set(result.template.model_dump().keys()) == _CANONICAL_KEYS
     assert result.appliedReferences == []
+    assert result.generationMode == "skeleton"
+    assert result.skeletonFirst is True
+    assert result.deferredSections == ["codeFiles", "missions", "interviewQuestions"]
     assert seen["timeout_seconds"] == settings.FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS
 
 
@@ -118,6 +124,7 @@ def test_regenerate_section_success_path_uses_normalizer(
     )
     assert result.source == "ollama"
     assert result.section == "requirements"
+    assert result.generationMode == "section_regenerated"
     assert isinstance(result.content, list)
     assert len(result.content) == 1
     assert result.content[0]["requirementId"] == "R-001"

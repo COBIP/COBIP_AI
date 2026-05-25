@@ -33,7 +33,7 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - 모든 필드명은 camelCase이다. 스키마에 없는 필드명(goal/hints/keywords/title/nextFeatureName 단독 key 등)은 추가하지 않는다.
 - requirements[].priority는 문자열("HIGH", "MEDIUM", "LOW"), apiSpec[].status는 정수, flow.steps는 문자열 배열이다.
 - placeholder, TODO, 생략, 점 세 개, "실제 동작 가능한 코드 문자열" 같은 더미·준비용 문구를 쓰지 않는다.
-- 최초 generate는 전체 구조를 빠르게 보여주는 템플릿이다. 상세 코드·미션·면접 답변은 regenerate-section으로 보완한다.
+- 최초 generate는 skeleton-first 전략이다. 기본 구조만 빠르게 만들고 상세 코드·미션·면접 답변은 regenerate-section으로 보완한다.
 """
 
 

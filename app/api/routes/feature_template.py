@@ -22,6 +22,9 @@ def generate_feature_template(
             "template": result.template.model_dump(),
             "source": result.source,
             "appliedReferences": result.appliedReferences,
+            "generationMode": result.generationMode,
+            "skeletonFirst": result.skeletonFirst,
+            "deferredSections": result.deferredSections,
         },
     )
 
@@ -38,5 +41,6 @@ def regenerate_feature_template_section(
             "section": result.section,
             "content": result.content,
             "source": result.source,
+            "generationMode": result.generationMode,
         },
     )
