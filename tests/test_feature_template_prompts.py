@@ -87,6 +87,45 @@ def test_prompt_quality_minimums() -> None:
     assert "최소 3개" in text
 
 
+def test_prompt_initial_generation_lightweight_policy() -> None:
+    text = build_feature_template_prompt(_req())
+    assert "최초 생성 경량화" in text
+    assert "전체 구조를 빠르게 보여주는 템플릿" in text
+    assert "regenerate-section" in text
+    assert "requirements: 3개" in text
+    assert "flow.steps: 5개" in text
+    assert "basicQuestions: 3개" in text
+    assert "nextRecommendations: 3개" in text
+
+
+def test_prompt_limits_initial_codefiles_volume() -> None:
+    text = build_feature_template_prompt(_req(framework="Spring Boot"))
+    assert "codeFiles 는 최대 4개" in text
+    assert "파일당 20~40줄 이내" in text
+    assert "LoginController.java" in text
+    assert "LoginService.java" in text
+    assert "LoginRequest.java" in text
+    assert "LoginResponse.java" in text
+    assert "보조 파일은 최초 generate 에서 생략" in text
+
+
+def test_prompt_limits_optional_sections_for_initial_generation() -> None:
+    text = build_feature_template_prompt(_req())
+    assert "missions 항목은 최소 2개 이상**이되, 최초 generate 에서는 정확히 2개" in text
+    assert "interviewQuestions 는 최소 3개 이상**이되, 최초 generate 에서는 정확히 3개" in text
+    assert "최초 generate 에서는 정확히 3개만 추천" in text
+
+
+def test_prompt_keeps_empty_array_rules_when_flags_false() -> None:
+    text = build_feature_template_prompt(
+        _req(includeCode=False, includeMissions=False, includeInterview=False)
+    )
+    assert "includeCode 가 false 이면 codeFiles 는 반드시 빈 배열 []" in text
+    assert "includeMissions 가 false 이면 missions 는 반드시 빈 배열 []" in text
+    assert "includeInterview 가 false 이면 interviewQuestions 는 반드시 빈 배열 []" in text
+    assert "플래그로 배열을 비우는 경우는 예외" in text
+
+
 def test_prompt_maps_conceptual_fields_to_schema_without_extra_keys() -> None:
     """교육용 개념(goal/hints/keywords 등)은 스키마 필드에 녹이라는 지시가 포함된다."""
     text = build_feature_template_prompt(_req())
@@ -129,8 +168,8 @@ def test_prompt_7_4_content_quality_minimums_and_api_json() -> None:
     """7-4: 실무형 품질 지시·최소 개수·apiSpec 예시 JSON·스키마 밖 key 금지 유지."""
     text = build_feature_template_prompt(_req())
     assert "요구사항(requirements)은 최소 3개 이상" in text
-    assert "기본 문제(basicQuestions)는 최소 3개 이상" in text
-    assert "다음 추천(nextRecommendations)은 최소 3개 이상" in text
+    assert "기본 문제(basicQuestions)는 정확히 3개" in text
+    assert "다음 추천(nextRecommendations)은 정확히 3개" in text
     assert "missions는 최소 2개 이상" in text
     assert "interviewQuestions는 최소 3개 이상" in text
     assert "필드 예시가 담긴 JSON 객체" in text
