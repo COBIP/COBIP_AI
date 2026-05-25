@@ -50,6 +50,8 @@ __all__ = ["FeatureTemplateGenerator"]
 
 
 logger = logging.getLogger(__name__)
+_INITIAL_GENERATION_MODE = "skeleton"
+_DEFERRED_INITIAL_SECTIONS = ["codeFiles", "missions", "interviewQuestions"]
 
 _LANGUAGE_EXTENSION: dict[str, str] = {
     "python": "py",
@@ -120,6 +122,9 @@ class FeatureTemplateGenerator:
                 template=FeatureTemplateData(**normalized),
                 source="fallback",
                 appliedReferences=applied_refs,
+                generationMode="fallback",
+                skeletonFirst=True,
+                deferredSections=list(_DEFERRED_INITIAL_SECTIONS),
             )
 
         logger.info(
@@ -130,6 +135,9 @@ class FeatureTemplateGenerator:
             template=template,
             source=self._llm_service.provider,
             appliedReferences=applied_refs,
+            generationMode=_INITIAL_GENERATION_MODE,
+            skeletonFirst=True,
+            deferredSections=list(_DEFERRED_INITIAL_SECTIONS),
         )
 
     def regenerate_section(
@@ -143,15 +151,15 @@ class FeatureTemplateGenerator:
 
         if canonical == "codeFiles" and not request.includeCode:
             return FeatureTemplateRegenerateSectionResult(
-                section=canonical, content=[], source="fallback"
+                section=canonical, content=[], source="fallback", generationMode="fallback"
             )
         if canonical == "missions" and not request.includeMissions:
             return FeatureTemplateRegenerateSectionResult(
-                section=canonical, content=[], source="fallback"
+                section=canonical, content=[], source="fallback", generationMode="fallback"
             )
         if canonical == "interviewQuestions" and not request.includeInterview:
             return FeatureTemplateRegenerateSectionResult(
-                section=canonical, content=[], source="fallback"
+                section=canonical, content=[], source="fallback", generationMode="fallback"
             )
 
         prompt = build_feature_template_section_prompt(
@@ -194,12 +202,14 @@ class FeatureTemplateGenerator:
                 section=canonical,
                 content=content,
                 source="fallback",
+                generationMode="fallback",
             )
 
         return FeatureTemplateRegenerateSectionResult(
             section=canonical,
             content=content,
             source=self._llm_service.provider,
+            generationMode="section_regenerated",
         )
 
     @staticmethod

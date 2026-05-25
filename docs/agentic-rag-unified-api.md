@@ -164,7 +164,7 @@ Content-Type: application/json
 | 값 | 의미 |
 | --- | --- |
 | `chat` | `data.result`가 챗봇 응답 (`answer`, `source`, `ragUsed`, `references`, `agent` 등) |
-| `feature_template` | `data.result`가 템플릿 (`template`, `source`, `request`) |
+| `feature_template` | `data.result`가 템플릿 (`template`, `source`, `request`, `generationMode`, `skeletonFirst`, `deferredSections`) |
 
 ### `data.trace`
 
@@ -192,6 +192,9 @@ Content-Type: application/json
 | `resultType` | 응답 `data.resultType`과 동일 |
 | `routeDecision` | intent → service 라우팅 요약 |
 | `executionMode` | 최상위 실행 모드 또는 하위 chat agent mode |
+| `generationMode` | 기능템플릿 생성 전략 (`skeleton`, `fallback` 등) |
+| `skeletonFirst` | 최초 generate가 skeleton-first 전략이면 `true` |
+| `deferredSections` | 상세 생성을 `regenerate-section`으로 미루는 섹션 목록 |
 
 chat 경로일 때 `data.result.agent.trace`에는 `/ai/chat`과 동일한 **하위** trace(`HybridIntentClassifier`, handler명, `toolCandidates` 등)가 추가로 포함될 수 있습니다.
 
@@ -202,6 +205,10 @@ LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
 - chat: `data.result.source` (`ollama` \| `fallback`)
 - feature_template: `data.result.source` (`ollama` \| `fallback`)
 - trace: `data.trace.source`
+
+### 기능템플릿 skeleton-first 정책
+
+12차부터 최초 `generate`는 전체 상세 산출물을 한 번에 만들기보다 `overview`, `requirements`, `flow`, `apiSpec`, `basicQuestions`, `nextRecommendations` 중심의 가벼운 기본 구조를 우선 반환합니다. `codeFiles`, `missions`, `interviewQuestions` 상세 생성은 `POST /ai/feature-template/regenerate-section` 경로에서 섹션별로 보강하는 것을 기본 전략으로 둡니다.
 
 ---
 

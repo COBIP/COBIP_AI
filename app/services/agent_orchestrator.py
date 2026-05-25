@@ -296,6 +296,9 @@ class AgentOrchestrator:
             resultType="feature_template",
             routeDecision=route_decision,
             executionMode="rule_based",
+            generationMode=result.generationMode,
+            skeletonFirst=result.skeletonFirst,
+            deferredSections=result.deferredSections,
         )
         return AgenticRagResponseData(
             intent=IntentType.FEATURE_TEMPLATE_GENERATE,
@@ -305,6 +308,9 @@ class AgentOrchestrator:
                 "source": result.source,
                 "request": feature_request.model_dump(),
                 "appliedReferences": result.appliedReferences,
+                "generationMode": result.generationMode,
+                "skeletonFirst": result.skeletonFirst,
+                "deferredSections": result.deferredSections,
             },
             trace=trace,
         )
