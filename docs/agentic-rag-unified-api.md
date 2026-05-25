@@ -235,6 +235,7 @@ LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
 - **Dedupe**: `title + content 앞 100자`(공백 정규화·소문자) 기준으로 중복 제거합니다. 출처(`source`)는 키에 포함하지 않아서, 같은 문서가 manual/qdrant 두 채널로 들어와도 한 번만 주입됩니다.
 - **Graceful fallback**: Qdrant 미기동, 컬렉션 없음, embedding 실패, 결과 0개, payload 이상 등 어떤 단계 실패도 호출자에게 예외를 던지지 않습니다. 기능템플릿 생성은 그대로 계속 진행되고 실패/스킵 사유는 `trace.ragFailureReason` / `trace.ragRetrievalSkippedReason`에 기록됩니다.
 - **skeleton-first 유지**: 자동 주입이 들어가도 12차 `generationMode=skeleton`, `skeletonFirst=true`, `deferredSections=["codeFiles","missions","interviewQuestions"]` 정책은 그대로 유지됩니다.
+- **Seed 데이터 (14차)**: Spring Boot 로그인 기능 기준 초기 지식 문서를 Qdrant에 적재할 수 있는 dry-run 안전 seed 스크립트가 `scripts/seed_qdrant_login_knowledge.py`로 제공됩니다. 운영 적용 절차와 자동 RAG 검증 방법은 [qdrant-seed.md](./qdrant-seed.md)를 참고하세요.
 
 trace metadata 필드 (`data.trace`):
 
