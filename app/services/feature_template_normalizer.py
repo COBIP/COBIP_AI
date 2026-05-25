@@ -510,15 +510,23 @@ def _login_api_spec_template() -> dict[str, Any]:
         "apiName": "로그인 API",
         "method": "POST",
         "endpoint": "/api/auth/login",
-        "description": "이메일 또는 사용자명과 비밀번호를 검증해 accessToken을 발급한다.",
+        "description": "이메일과 비밀번호를 입력받아 인증 후 JWT accessToken을 발급한다.",
         "requestBody": {
-            "email": "user@example.com",
-            "password": "password123!",
+            "email": "string",
+            "password": "string",
         },
         "responseBody": {
-            "accessToken": "jwt-access-token",
-            "tokenType": "Bearer",
-            "user": {"id": 1, "email": "user@example.com"},
+            "success": True,
+            "message": "로그인 성공",
+            "data": {
+                "accessToken": "string",
+                "tokenType": "Bearer",
+                "user": {
+                    "userId": "long",
+                    "email": "string",
+                    "nickname": "string",
+                },
+            },
         },
         "status": 200,
     }
@@ -526,9 +534,11 @@ def _login_api_spec_template() -> dict[str, Any]:
 
 def _default_login_learning_goals() -> list[str]:
     return [
-        "로그인 요청 DTO와 응답 DTO의 역할을 이해한다.",
-        "입력값 검증, 사용자 조회, 비밀번호 검증 흐름을 계층별로 설명한다.",
-        "인증 성공 시 토큰을 발급하고 실패 시 일관된 오류 응답을 반환하는 방식을 익힌다.",
+        "Controller → Service → Repository 계층 흐름을 이해한다.",
+        "LoginRequest/LoginResponse DTO 분리 이유를 이해한다.",
+        "BCrypt 기반 비밀번호 해시 저장과 검증을 이해한다.",
+        "JWT accessToken/tokenType/user 응답 구조와 토큰 발급 흐름을 이해한다.",
+        "로그인 실패 시 400/401 응답으로 인증 결과를 일관되게 처리하는 방식을 이해한다.",
     ]
 
 
@@ -583,6 +593,183 @@ def _is_poor_short_text(value: object) -> bool:
     return text in {"", "정답", "설명"}
 
 
+_LOGIN_API_NAME_KOREAN = "로그인 API"
+
+
+def _looks_like_path(text: str) -> bool:
+    s = text.strip()
+    if not s:
+        return False
+    return s.startswith("/") or s.startswith("http://") or s.startswith("https://")
+
+
+def _is_poor_api_request_body(value: object) -> bool:
+    if not isinstance(value, dict) or not value:
+        return True
+    has_email_or_username = any(
+        k in value for k in ("email", "username", "userId", "id")
+    )
+    has_password = "password" in value
+    if has_password and has_email_or_username:
+        return False
+    keys = {str(k).lower() for k in value.keys()}
+    if keys == {"field"} or keys == {"field", "type"}:
+        return True
+    return not (has_password and has_email_or_username)
+
+
+def _is_poor_api_response_body(value: object) -> bool:
+    if not isinstance(value, dict) or not value:
+        return True
+    data = value.get("data")
+    if isinstance(data, dict):
+        if "accessToken" in data or "user" in data:
+            return False
+    if "accessToken" in value and ("user" in value or "tokenType" in value):
+        return False
+    return True
+
+
+def _default_login_requirements_detailed(
+    request: FeatureTemplateGenerateRequest | None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "requirementId": "R-001",
+            "name": "로그인 정보 입력",
+            "description": "사용자는 email과 password를 입력해 로그인 요청을 보낸다.",
+            "inputValue": "email, password",
+            "processCondition": "email과 password 모두 비어 있지 않다.",
+            "successResult": "요청이 서버로 전달된다.",
+            "failureResult": "필수값 누락 시 400 응답을 반환한다.",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "POST /api/auth/login",
+        },
+        {
+            "requirementId": "R-002",
+            "name": "입력값 검증",
+            "description": "email 형식과 password 길이를 검증한다.",
+            "inputValue": "email format, password length",
+            "processCondition": "email은 형식이 유효하고 password는 8자 이상이다.",
+            "successResult": "검증 통과 시 사용자 조회 단계로 진행한다.",
+            "failureResult": "검증 실패 시 400 응답과 사유 메시지를 반환한다.",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "POST /api/auth/login",
+        },
+        {
+            "requirementId": "R-003",
+            "name": "인증 처리 및 토큰 발급",
+            "description": "사용자 조회와 비밀번호 해시 검증을 거쳐 JWT accessToken을 발급한다.",
+            "inputValue": "stored password hash, plain password",
+            "processCondition": "BCrypt.matches로 해시 비교에 성공한다.",
+            "successResult": "200 응답으로 accessToken/tokenType/user 정보를 반환한다.",
+            "failureResult": "인증 실패 시 401 응답을 반환한다.",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "POST /api/auth/login",
+        },
+    ]
+
+
+def _default_login_flow_layers() -> list[dict[str, str]]:
+    return [
+        {"layer": "Client", "role": "로그인 폼 입력 및 API 호출"},
+        {"layer": "Controller", "role": "POST /api/auth/login 요청 수신과 입력 DTO 검증"},
+        {
+            "layer": "Service",
+            "role": "사용자 조회, 비밀번호 해시 검증, JWT accessToken 발급",
+        },
+        {"layer": "Repository", "role": "username/email 기준으로 사용자 정보를 조회"},
+        {"layer": "DB", "role": "사용자 계정과 비밀번호 해시 저장"},
+        {
+            "layer": "Response",
+            "role": "accessToken/tokenType/user 정보를 응답으로 반환",
+        },
+    ]
+
+
+def _default_login_flow_steps() -> list[str]:
+    return [
+        "1. 사용자가 email과 password를 입력한다.",
+        "2. 클라이언트가 POST /api/auth/login 요청을 보낸다.",
+        "3. Controller가 요청 DTO를 검증한다.",
+        "4. Service가 사용자 조회 및 비밀번호 해시 검증을 수행한다.",
+        "5. 인증 성공 시 JWT accessToken을 발급하고 응답을 반환한다.",
+    ]
+
+
+def _default_login_next_recommendations() -> list[dict[str, Any]]:
+    return [
+        {
+            "featureName": "회원가입",
+            "reason": "로그인과 짝을 이루는 사용자 생성 흐름을 학습한다.",
+            "expectedLearning": "회원 등록 검증과 BCrypt 해시 저장을 익힌다.",
+            "priority": 1,
+        },
+        {
+            "featureName": "JWT 인증",
+            "reason": "토큰 기반 무상태 인증 패턴을 확장 학습한다.",
+            "expectedLearning": "accessToken 발급, 서명 검증, 만료/리프레시 정책을 이해한다.",
+            "priority": 2,
+        },
+        {
+            "featureName": "로그아웃",
+            "reason": "토큰 무효화와 클라이언트 상태 정리 방식을 학습한다.",
+            "expectedLearning": "서버측 블랙리스트, 클라이언트 토큰 제거 전략을 이해한다.",
+            "priority": 3,
+        },
+        {
+            "featureName": "권한 관리",
+            "reason": "인증된 사용자에 대한 역할/권한 기반 인가를 학습한다.",
+            "expectedLearning": "Role 모델링과 인가 필터/인터셉터 적용을 이해한다.",
+            "priority": 4,
+        },
+        {
+            "featureName": "비밀번호 재설정",
+            "reason": "비밀번호 분실 대응 흐름과 보안 토큰 발급을 학습한다.",
+            "expectedLearning": "재설정 토큰 발급/검증과 만료 처리를 이해한다.",
+            "priority": 5,
+        },
+    ]
+
+
+_KOREAN_SPACE_VARIANT_MAP: dict[str, str] = {
+    "회원가입": "회원가입",
+    "회원 가입": "회원가입",
+    "로그인": "로그인",
+    "로그아웃": "로그아웃",
+    "로그 아웃": "로그아웃",
+    "비밀번호재설정": "비밀번호 재설정",
+    "비밀번호 재설정": "비밀번호 재설정",
+    "권한관리": "권한 관리",
+    "권한 관리": "권한 관리",
+    "jwt 인증": "JWT 인증",
+    "jwt인증": "JWT 인증",
+}
+
+
+def _next_rec_canonical_key(name: str) -> str:
+    base = _coerce_to_string(name).strip()
+    if not base:
+        return ""
+    key = _KOREAN_SPACE_VARIANT_MAP.get(base)
+    if key:
+        return key.lower()
+    return base.replace(" ", "").lower()
+
+
+def _normalize_next_rec_display_name(name: str) -> str:
+    base = _coerce_to_string(name).strip()
+    if not base:
+        return base
+    pretty = _KOREAN_SPACE_VARIANT_MAP.get(base)
+    if pretty:
+        return pretty
+    pretty = _KOREAN_SPACE_VARIANT_MAP.get(base.lower())
+    if pretty:
+        return pretty
+    return base
+
+
 def _ensure_login_quality_baseline(
     normalized: dict[str, Any],
     request: FeatureTemplateGenerateRequest | None,
@@ -592,9 +779,13 @@ def _ensure_login_quality_baseline(
         return
 
     overview = normalized.get("overview")
-    if isinstance(overview, dict) and _str_list_effectively_empty(overview.get("learningGoals")):
-        overview["learningGoals"] = _default_login_learning_goals()
-        changed_fields.append("overview.learningGoals[login-default]")
+    if isinstance(overview, dict):
+        goals = overview.get("learningGoals")
+        if _str_list_effectively_empty(goals) or (
+            isinstance(goals, list) and len(goals) < 3
+        ):
+            overview["learningGoals"] = _default_login_learning_goals()
+            changed_fields.append("overview.learningGoals[login-default]")
 
     login_api = _login_api_spec_template()
     api_specs = normalized.get("apiSpec")
@@ -610,21 +801,29 @@ def _ensure_login_quality_baseline(
             if _is_generic_endpoint(item.get("endpoint")):
                 item["endpoint"] = login_api["endpoint"]
                 changed_fields.append(f"apiSpec[{index}].endpoint")
-            if _is_missing_or_blank_str(item.get("apiName")):
-                item["apiName"] = login_api["apiName"]
+            api_name_val = _coerce_to_string(item.get("apiName")).strip()
+            if (
+                _is_missing_or_blank_str(item.get("apiName"))
+                or _looks_like_path(api_name_val)
+            ):
+                item["apiName"] = _LOGIN_API_NAME_KOREAN
                 changed_fields.append(f"apiSpec[{index}].apiName")
-            if _is_missing_or_blank_str(item.get("method")):
+            method_val = _coerce_to_string(item.get("method")).strip().upper()
+            if not method_val or method_val != "POST":
                 item["method"] = "POST"
                 changed_fields.append(f"apiSpec[{index}].method")
             if _is_missing_or_blank_str(item.get("description")):
                 item["description"] = login_api["description"]
                 changed_fields.append(f"apiSpec[{index}].description")
-            if not isinstance(item.get("requestBody"), dict) or not item.get("requestBody"):
+            if _is_poor_api_request_body(item.get("requestBody")):
                 item["requestBody"] = dict(login_api["requestBody"])
                 changed_fields.append(f"apiSpec[{index}].requestBody")
-            if not isinstance(item.get("responseBody"), dict) or not item.get("responseBody"):
+            if _is_poor_api_response_body(item.get("responseBody")):
                 item["responseBody"] = dict(login_api["responseBody"])
                 changed_fields.append(f"apiSpec[{index}].responseBody")
+            if item.get("status") in (None, "", 0):
+                item["status"] = 200
+                changed_fields.append(f"apiSpec[{index}].status")
             fixed_specs.append(item)
         normalized["apiSpec"] = fixed_specs or [dict(login_api)]
 
@@ -632,15 +831,61 @@ def _ensure_login_quality_baseline(
     if not isinstance(reqs, list):
         reqs = []
     fixed_reqs: list[dict[str, Any]] = [dict(item) for item in reqs if isinstance(item, dict)]
-    defaults = _default_login_requirements(request)
+    defaults = _default_login_requirements_detailed(request)
     while len(fixed_reqs) < 3:
         fixed_reqs.append(dict(defaults[len(fixed_reqs)]))
         changed_fields.append("requirements[login+pad]")
     for index, item in enumerate(fixed_reqs):
-        if _is_generic_endpoint(item.get("relatedScreenOrApi")):
-            item["relatedScreenOrApi"] = "POST /api/auth/login"
+        default = defaults[min(index, len(defaults) - 1)]
+        rel = _coerce_to_string(item.get("relatedScreenOrApi")).strip()
+        rel_lower = rel.lower()
+        has_login_api_anchor = (
+            "/api/auth/login" in rel_lower
+            or "logincontroller" in rel_lower
+            or "loginservice" in rel_lower
+            or "loginrequest" in rel_lower
+            or "loginresponse" in rel_lower
+        )
+        if (
+            _is_generic_endpoint(item.get("relatedScreenOrApi"))
+            or _is_missing_or_blank_str(item.get("relatedScreenOrApi"))
+            or not has_login_api_anchor
+        ):
+            item["relatedScreenOrApi"] = default["relatedScreenOrApi"]
             changed_fields.append(f"requirements[{index}].relatedScreenOrApi")
+        for field in (
+            "inputValue",
+            "processCondition",
+            "successResult",
+            "failureResult",
+            "description",
+            "name",
+        ):
+            if _is_missing_or_blank_str(item.get(field)):
+                item[field] = default[field]
+                changed_fields.append(f"requirements[{index}].{field}")
+        prio = _coerce_to_string(item.get("priority")).strip().upper()
+        if index < 3 and prio not in {"HIGH", "CRITICAL"}:
+            item["priority"] = "HIGH"
+            changed_fields.append(f"requirements[{index}].priority")
+        if _is_missing_or_blank_str(item.get("requirementId")):
+            item["requirementId"] = default["requirementId"]
+            changed_fields.append(f"requirements[{index}].requirementId")
     normalized["requirements"] = fixed_reqs
+
+    flow = normalized.get("flow")
+    if isinstance(flow, dict):
+        layers = flow.get("layers")
+        if not isinstance(layers, list) or len(layers) <= 1:
+            flow["layers"] = list(_default_login_flow_layers())
+            changed_fields.append("flow.layers[login-default]")
+        steps = flow.get("steps")
+        if _str_list_effectively_empty(steps) or (
+            isinstance(steps, list) and len(steps) < 4
+        ):
+            flow["steps"] = list(_default_login_flow_steps())
+            changed_fields.append("flow.steps[login-default]")
+        normalized["flow"] = flow
 
     questions = normalized.get("basicQuestions")
     if not isinstance(questions, list):
@@ -677,6 +922,44 @@ def _ensure_login_quality_baseline(
             item["difficulty"] = default["difficulty"]
             changed_fields.append(f"basicQuestions[{index}].difficulty")
     normalized["basicQuestions"] = fixed_questions
+
+    recs = normalized.get("nextRecommendations")
+    if isinstance(recs, list):
+        seen_keys: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for raw_item in recs:
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            name = _coerce_to_string(item.get("featureName"))
+            key = _next_rec_canonical_key(name)
+            if not key or key in seen_keys:
+                if key in seen_keys:
+                    changed_fields.append("nextRecommendations[dedupe]")
+                continue
+            seen_keys.add(key)
+            pretty = _normalize_next_rec_display_name(name)
+            if pretty != name:
+                item["featureName"] = pretty
+                changed_fields.append("nextRecommendations[normalizeName]")
+            deduped.append(item)
+
+        defaults_rec = _default_login_next_recommendations()
+        for default_item in defaults_rec:
+            if len(deduped) >= 3:
+                break
+            key = _next_rec_canonical_key(default_item["featureName"])
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(dict(default_item))
+            changed_fields.append("nextRecommendations[login+pad]")
+
+        for new_priority, item in enumerate(deduped, start=1):
+            if item.get("priority") != new_priority:
+                item["priority"] = new_priority
+                changed_fields.append("nextRecommendations[priorityReset]")
+        normalized["nextRecommendations"] = deduped
 
 
 def _ensure_final_login_defense(
