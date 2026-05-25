@@ -116,10 +116,13 @@ class AgentOrchestrator:
         references: list[Any] = []
         rag_used = False
         should_use_rag = self._should_use_rag(request)
-        if intent == IntentType.FEATURE_TEMPLATE_GENERATE and should_use_rag:
-            steps.append("rag_retrieval")
-            references = self._retrieve_references(request.message)
-            rag_used = bool(references)
+        if intent == IntentType.FEATURE_TEMPLATE_GENERATE:
+            # 13차: feature_template_generate 경로는 _run_feature_template_generate가
+            # 자체적으로 Qdrant retrieval 수행. 여기서는 외부 references를 비워둔다.
+            if should_use_rag:
+                steps.append("rag_retrieval_delegated_to_feature_template")
+            else:
+                steps.append("rag_retrieval_skipped")
         elif should_use_rag:
             steps.append("rag_retrieval_delegated_to_chat_handler")
         else:
@@ -252,12 +255,57 @@ class AgentOrchestrator:
             extract_raw_rag_references_from_reference_context,
             select_usable_rag_references,
         )
+        from app.services.rag_service import (
+            RagSourceLabel,
+            build_feature_template_retrieval_query,
+            merge_manual_and_auto_rag_references,
+            retrieve_feature_template_rag_references,
+        )
 
         feature_request, inferred = self._build_feature_template_request(
             request,
             references=references,
         )
         steps.append("feature_template_request_resolution")
+
+        # 13차: feature_template_generate 경로 자체 retrieval
+        manual_refs = extract_raw_rag_references_from_reference_context(
+            feature_request.referenceContext,
+        )
+        manual_usable_count = len(select_usable_rag_references(manual_refs))
+
+        retrieval_query = build_feature_template_retrieval_query(
+            message=request.message,
+            feature_name=feature_request.featureName,
+            framework=feature_request.framework,
+            language=feature_request.language,
+            level=feature_request.level.value if feature_request.level else None,
+        )
+        steps.append("rag_retrieval_attempted")
+        retrieval = retrieve_feature_template_rag_references(
+            query=retrieval_query,
+            top_k=settings.RAG_TOP_K,
+        )
+        if retrieval.status == "success":
+            steps.append("rag_retrieval_success")
+        elif retrieval.status == "empty":
+            steps.append("rag_retrieval_empty")
+        elif retrieval.status == "failed":
+            steps.append("rag_retrieval_failed")
+        else:
+            steps.append("rag_retrieval_skipped_auto")
+
+        if retrieval.references:
+            merged_refs = merge_manual_and_auto_rag_references(
+                manual_refs, retrieval.references
+            )
+            updated_ctx = dict(feature_request.referenceContext or {})
+            updated_ctx["ragReferences"] = merged_refs
+            feature_request = feature_request.model_copy(
+                update={"referenceContext": updated_ctx}
+            )
+            steps.append("rag_context_injection")
+
         steps.append("rag_context_detection")
         raw_rag = extract_raw_rag_references_from_reference_context(
             feature_request.referenceContext,
@@ -265,6 +313,17 @@ class AgentOrchestrator:
         usable_rag = select_usable_rag_references(raw_rag)
         rag_ref_count = len(usable_rag)
         rag_ctx_available = rag_ref_count > 0
+
+        auto_usable_count = len(retrieval.references)
+        rag_source_label: RagSourceLabel
+        if manual_usable_count > 0 and auto_usable_count > 0:
+            rag_source_label = "manual+qdrant"
+        elif auto_usable_count > 0:
+            rag_source_label = "qdrant"
+        elif manual_usable_count > 0:
+            rag_source_label = "manual"
+        else:
+            rag_source_label = "none"
 
         result = FeatureTemplateGenerator().generate(feature_request)
         steps.append("feature_template_generate_execution")
@@ -281,7 +340,7 @@ class AgentOrchestrator:
             serviceName=service_name,
             handler="FeatureTemplateGenerator.generate",
             steps=steps + ["result_serialization", "trace_metadata_enrichment"],
-            ragUsed=rag_used,
+            ragUsed=rag_ctx_available,
             references=references,
             inferredFields=inferred,
             latencyMs=latency_ms,
@@ -299,6 +358,14 @@ class AgentOrchestrator:
             generationMode=result.generationMode,
             skeletonFirst=result.skeletonFirst,
             deferredSections=result.deferredSections,
+            ragRetrievalAttempted=retrieval.attempted,
+            ragRetrievalStatus=retrieval.status,
+            ragRetrievedCount=retrieval.retrieved_count,
+            ragInjectedCount=rag_ref_count,
+            ragQuery=retrieval.query,
+            ragSource=rag_source_label,
+            ragFailureReason=retrieval.failure_reason,
+            ragRetrievalSkippedReason=retrieval.skipped_reason,
         )
         return AgenticRagResponseData(
             intent=IntentType.FEATURE_TEMPLATE_GENERATE,
@@ -421,7 +488,9 @@ class AgentOrchestrator:
         ref["agenticUserMessage"] = request.message
         if request.context:
             ref["userContext"] = request.context
-        if references:
+        # 13차: 수동 referenceContext.ragReferences를 절대 덮어쓰지 않는다.
+        # 자동 retrieval 결과는 _run_feature_template_generate에서 별도로 병합한다.
+        if references and not ref.get("ragReferences") and not ref.get("rag_references"):
             ref["ragReferences"] = references
 
     @staticmethod

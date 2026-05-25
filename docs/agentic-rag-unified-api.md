@@ -56,7 +56,12 @@
    - `feature_template_generate` → `feature_template_generator.generate`
 3. **RAG 분기** (`RAG_ENABLED` + `useRag` 또는 메시지 키워드)  
    - **chat**: 오케스트레이터는 직접 검색하지 않고, `run_chat` → handler → `ChatService` 쪽에 위임 (`rag_retrieval_delegated_to_chat_handler`)  
-   - **feature_template_generate**: `RetrieverService`로 검색 후 `referenceContext.ragReferences`에 저장
+   - **feature_template_generate** (13차부터):  
+     · `featureName` / `framework` / `language` / `level` / `message`로 합성된 query를 `RetrieverService.retrieve`에 전달  
+     · Qdrant hit은 `{ "title", "source": "qdrant", "content", "metadata"? }` 형태로 변환되어 `referenceContext.ragReferences`에 자동 주입  
+     · 수동 `featureTemplate.referenceContext.ragReferences`는 절대 덮어쓰지 않고 우선 보존된다  
+     · 수동 + 자동은 `title + content 앞 100자` 기준 dedupe 후 병합 (출처가 달라도 같은 문서면 한 번만 주입)  
+     · Qdrant/embedding 실패, 컬렉션 없음, 결과 0개, payload 이상 등 모든 실패는 graceful: 기존 흐름이 그대로 계속 진행되며 실패 사유는 `trace.ragFailureReason` / `trace.ragRetrievalSkippedReason`에 기록된다
 4. **실행**  
    - chat → `AgentOrchestrator.run_chat` → `HybridIntentClassifier` + handler → `ChatService`  
    - feature_template_generate → `FeatureTemplateGenerator.generate`
@@ -195,6 +200,14 @@ Content-Type: application/json
 | `generationMode` | 기능템플릿 생성 전략 (`skeleton`, `fallback` 등) |
 | `skeletonFirst` | 최초 generate가 skeleton-first 전략이면 `true` |
 | `deferredSections` | 상세 생성을 `regenerate-section`으로 미루는 섹션 목록 |
+| `ragRetrievalAttempted` | 13차: feature_template_generate 경로에서 자동 Qdrant retrieval을 시도했는지 |
+| `ragRetrievalStatus` | `success` \| `empty` \| `skipped` \| `failed` |
+| `ragRetrievedCount` | Qdrant 등 retriever가 반환한 raw hit 수 (필터 전) |
+| `ragInjectedCount` | manual+auto dedupe 후 prompt에 실제 주입된 reference 수 |
+| `ragQuery` | 자동 retrieval에 사용된 query 문자열 |
+| `ragSource` | `manual` \| `qdrant` \| `manual+qdrant` \| `none` |
+| `ragFailureReason` | 자동 retrieval 실패 사유 요약 (실패 시) |
+| `ragRetrievalSkippedReason` | 자동 retrieval을 시도하지 않은 사유 (예: `rag_disabled`, `empty_query`) |
 
 chat 경로일 때 `data.result.agent.trace`에는 `/ai/chat`과 동일한 **하위** trace(`HybridIntentClassifier`, handler명, `toolCandidates` 등)가 추가로 포함될 수 있습니다.
 
@@ -210,6 +223,34 @@ LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
 
 12차부터 최초 `generate`는 전체 상세 산출물을 한 번에 만들기보다 `overview`, `requirements`, `flow`, `apiSpec`, `basicQuestions`, `nextRecommendations` 중심의 가벼운 기본 구조를 우선 반환합니다. `codeFiles`, `missions`, `interviewQuestions` 상세 생성은 `POST /ai/feature-template/regenerate-section` 경로에서 섹션별로 보강하는 것을 기본 전략으로 둡니다.
 
+### 기능템플릿 Qdrant 자동 RAG 주입 정책 (13차)
+
+13차부터 `POST /ai/agentic-rag/run`의 `feature_template_generate` 경로는 Qdrant 검색 결과를 자동으로 `referenceContext.ragReferences`로 변환·주입합니다. 사용자가 보내는 `featureTemplate.referenceContext.ragReferences`(수동 입력)와 자동 결과는 **수동 우선 + dedupe 병합** 정책으로 결합됩니다.
+
+- **Retriever**: `app/services/retriever_service.py`의 `RetrieverService`를 그대로 재사용합니다(`QdrantService` + `EmbeddingService`). 본 13차에서는 RetrieverService를 새로 만들지 않고 기존 구현을 그대로 활용합니다.
+- **활성 조건**: 서버 `RAG_ENABLED=true`. `RAG_ENABLED=false`인 경우 retrieval을 시도하지 않고 `trace.ragRetrievalSkippedReason="rag_disabled"`로 기록합니다.
+- **Query 구성**: `{framework} {featureName} {language} {level} 기능템플릿 요구사항 API 코드 학습` 뒤에 `message`의 앞 160자를 붙입니다. 전체 길이는 256자로 제한합니다.
+- **Hit → ragReference 변환**: `{ "title", "source": "qdrant", "content", "sourceType?", "score?", "metadata?" }`. `title`이 없으면 metadata의 `docType` / `section` / `fileName` / `path` / `url` 순으로 채웁니다. `content`는 1000자로 제한합니다.
+- **수동 reference 우선**: 수동 `ragReferences`는 절대 덮어쓰지 않고 그대로 prompt에 들어갑니다.
+- **Dedupe**: `title + content 앞 100자`(공백 정규화·소문자) 기준으로 중복 제거합니다. 출처(`source`)는 키에 포함하지 않아서, 같은 문서가 manual/qdrant 두 채널로 들어와도 한 번만 주입됩니다.
+- **Graceful fallback**: Qdrant 미기동, 컬렉션 없음, embedding 실패, 결과 0개, payload 이상 등 어떤 단계 실패도 호출자에게 예외를 던지지 않습니다. 기능템플릿 생성은 그대로 계속 진행되고 실패/스킵 사유는 `trace.ragFailureReason` / `trace.ragRetrievalSkippedReason`에 기록됩니다.
+- **skeleton-first 유지**: 자동 주입이 들어가도 12차 `generationMode=skeleton`, `skeletonFirst=true`, `deferredSections=["codeFiles","missions","interviewQuestions"]` 정책은 그대로 유지됩니다.
+
+trace metadata 필드 (`data.trace`):
+
+| 필드 | 의미 |
+| --- | --- |
+| `ragRetrievalAttempted` | 자동 retrieval 시도 여부 |
+| `ragRetrievalStatus` | `success` \| `empty` \| `skipped` \| `failed` |
+| `ragRetrievedCount` | Qdrant raw hit 수 |
+| `ragInjectedCount` | manual+auto dedupe 후 prompt에 실제 주입된 reference 수 |
+| `ragQuery` | 자동 retrieval에 사용된 query 문자열 |
+| `ragSource` | `manual` \| `qdrant` \| `manual+qdrant` \| `none` |
+| `ragFailureReason` | 실패 사유 (예: `retrieve_failed:RuntimeError`) |
+| `ragRetrievalSkippedReason` | 스킵 사유 (예: `rag_disabled`, `empty_query`) |
+
+기존 trace 필드(`ragContextAvailable`, `ragReferenceCount`, `appliedReferenceCount`, `fallbackUsed`, `source`, `resultType`, `routeDecision`, `executionMode`, `generationMode`, `skeletonFirst`, `deferredSections`)는 그대로 유지됩니다.
+
 ---
 
 ## 관련 코드
@@ -217,9 +258,13 @@ LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
 | 파일 | 역할 |
 | --- | --- |
 | `app/api/routes/agentic.py` | `POST /ai/agentic-rag/run` 라우터 |
-| `app/schemas/agentic.py` | `AgenticRagRequest`, `AgenticRagResponseData`, `AgenticRagTrace` |
-| `app/services/agent_orchestrator.py` | `run_agentic_rag()` |
+| `app/schemas/agentic.py` | `AgenticRagRequest`, `AgenticRagResponseData`, `AgenticRagTrace` (13차 RAG metadata 포함) |
+| `app/services/agent_orchestrator.py` | `run_agentic_rag()` 및 feature_template_generate 경로의 자동 Qdrant 주입 |
+| `app/services/rag_service.py` | 13차 — query 합성, Qdrant retrieval 래퍼, 수동/자동 dedupe 병합 |
+| `app/services/retriever_service.py` | `QdrantService` + `EmbeddingService` 조합 retriever (13차에서 재사용) |
 | `app/services/agent_router.py` | intent → `service_name` |
 | `tests/test_agentic_rag_api.py` | 라우팅 스모크 테스트 |
+| `tests/test_agentic_rag_auto_rag_injection.py` | 13차 자동 Qdrant 주입 통합 테스트 |
+| `tests/test_rag_service.py` | 13차 rag_service helper 단위 테스트 |
 
 `/ai/chat` 전용 1차 Agent 구조는 [agentic-rag-phase1.md](./agentic-rag-phase1.md)를 참고하세요.

@@ -110,6 +110,41 @@ class AgenticRagTrace(BaseModel):
         default_factory=list,
         description="최초 generate에서 상세 생성을 regenerate-section으로 미룬 섹션",
     )
+    # Agentic RAG 13차 — Qdrant 자동 retrieval 관측 필드
+    ragRetrievalAttempted: bool = Field(
+        default=False,
+        description="13차: feature_template_generate 경로에서 자동 RAG retrieval을 시도했는지",
+    )
+    ragRetrievalStatus: Literal["success", "empty", "skipped", "failed"] | None = Field(
+        default=None,
+        description="자동 RAG retrieval 결과 상태 (success|empty|skipped|failed)",
+    )
+    ragRetrievedCount: int = Field(
+        default=0,
+        ge=0,
+        description="Qdrant 등 retriever가 반환한 raw hit 수 (필터/정규화 전)",
+    )
+    ragInjectedCount: int = Field(
+        default=0,
+        ge=0,
+        description="manual+auto dedupe 후 prompt에 실제 주입된 reference 수",
+    )
+    ragQuery: str | None = Field(
+        default=None,
+        description="자동 retrieval에 사용된 query 문자열 (없으면 None)",
+    )
+    ragSource: Literal["manual", "qdrant", "manual+qdrant", "none"] | None = Field(
+        default=None,
+        description="prompt에 반영된 RAG reference 출처 요약",
+    )
+    ragFailureReason: str | None = Field(
+        default=None,
+        description="자동 retrieval 실패 사유 (실패 시에만)",
+    )
+    ragRetrievalSkippedReason: str | None = Field(
+        default=None,
+        description="자동 retrieval을 시도하지 않은 사유 (예: rag_disabled, empty_query)",
+    )
 
 
 class AgenticRagResponseData(BaseModel):
