@@ -41,8 +41,9 @@ def test_normalize_empty_dict_has_all_sections(sample_request: FeatureTemplateGe
     assert set(out.keys()) == _CANONICAL_KEYS
     assert isinstance(out["requirements"], list)
     assert isinstance(out["flow"], dict)
-    assert out["flow"]["steps"] == []
-    assert out["flow"]["layers"] == []
+    # 로그인 도메인은 11차 품질 정책에 따라 flow.steps/layers가 빈약하면 기본값으로 보정된다.
+    assert len(out["flow"]["steps"]) >= 4
+    assert len(out["flow"]["layers"]) >= 4
     assert out["overview"]["featureName"] == "로그인"
 
 
@@ -148,11 +149,13 @@ def test_requirements_missing_priority_and_related_get_defaults(
         ],
     }
     out = FeatureTemplateNormalizer.normalize(raw, sample_request)
-    assert out["requirements"][0]["priority"] == "MEDIUM"
-    assert out["requirements"][0]["relatedScreenOrApi"] == "로그인 화면 / 로그인 API"
+    # 로그인 도메인 R-001~R-003은 11차 정책상 HIGH로 강제된다.
+    assert out["requirements"][0]["priority"] == "HIGH"
+    # 로그인 도메인은 relatedScreenOrApi를 POST /api/auth/login으로 정렬한다.
+    assert out["requirements"][0]["relatedScreenOrApi"] == "POST /api/auth/login"
     template = FeatureTemplateData(**out)
-    assert template.requirements[0].priority == "MEDIUM"
-    assert template.requirements[0].relatedScreenOrApi == "로그인 화면 / 로그인 API"
+    assert template.requirements[0].priority == "HIGH"
+    assert template.requirements[0].relatedScreenOrApi == "POST /api/auth/login"
 
 
 def test_requirements_defaults_without_request_use_generic_related() -> None:
@@ -688,7 +691,10 @@ def test_login_api_endpoint_and_body_are_normalized(sample_request: FeatureTempl
     assert api["endpoint"] == "/api/auth/login"
     assert "email" in api["requestBody"]
     assert "password" in api["requestBody"]
-    assert "accessToken" in api["responseBody"]
+    # 11차 정책은 responseBody에 success/message/data 래퍼를 사용한다.
+    assert api["responseBody"]["data"]["accessToken"] == "string"
+    assert api["responseBody"]["data"]["tokenType"] == "Bearer"
+    assert "user" in api["responseBody"]["data"]
     assert out["codeFiles"] == []
     assert out["missions"] == []
     assert out["interviewQuestions"] == []
@@ -793,4 +799,152 @@ def test_login_quality_normalization_preserves_disabled_optional_sections(
     assert out["missions"] == []
     assert out["interviewQuestions"] == []
     assert out["apiSpec"][0]["endpoint"] == "/api/auth/login"
+    FeatureTemplateData(**out)
+
+
+# --- Agentic RAG 11차: 운영 품질 보정 추가 검증 ---------------------------------
+
+
+def test_login_api_name_path_replaced_with_korean(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "apiSpec": [
+            {
+                "apiName": "/api/feature",
+                "method": "POST",
+                "endpoint": "/api/feature",
+                "description": "",
+                "requestBody": {"field": "email", "type": "string"},
+                "responseBody": {"data": {"token": "example_token"}},
+                "status": 200,
+            }
+        ]
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    api = out["apiSpec"][0]
+    assert api["apiName"] in {"로그인 API", "로그인"}
+    assert api["endpoint"] == "/api/auth/login"
+    assert "email" in api["requestBody"]
+    assert "password" in api["requestBody"]
+    assert api["responseBody"]["data"]["accessToken"] == "string"
+    FeatureTemplateData(**out)
+
+
+def test_login_requirement_input_value_filled_when_blank(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "requirements": [
+            {
+                "requirementId": "R-001",
+                "name": "",
+                "description": "",
+                "inputValue": "",
+                "processCondition": "",
+                "successResult": "",
+                "failureResult": "",
+                "priority": "",
+                "relatedScreenOrApi": "",
+            }
+        ]
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    reqs = out["requirements"]
+    assert len(reqs) >= 3
+    assert reqs[0]["inputValue"]
+    assert reqs[0]["processCondition"]
+    assert reqs[0]["successResult"]
+    assert reqs[0]["failureResult"]
+    assert all(r["priority"] == "HIGH" for r in reqs[:3])
+    assert all(
+        "/api/auth/login" in r["relatedScreenOrApi"].lower()
+        or "logincontroller" in r["relatedScreenOrApi"].lower()
+        or "loginservice" in r["relatedScreenOrApi"].lower()
+        or "loginresponse" in r["relatedScreenOrApi"].lower()
+        for r in reqs[:3]
+    )
+    FeatureTemplateData(**out)
+
+
+def test_login_flow_layers_expanded_when_only_controller(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "flow": {
+            "steps": ["1. start"],
+            "layers": [{"layer": "Controller", "role": "수신"}],
+        }
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    layer_names = {layer["layer"] for layer in out["flow"]["layers"]}
+    for required in ("Controller", "Service", "Repository"):
+        assert required in layer_names
+    assert {"Client", "Response"} & layer_names
+    assert len(out["flow"]["steps"]) >= 4
+    FeatureTemplateData(**out)
+
+
+def test_login_overview_learning_goals_include_layer_dto_bcrypt(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {"overview": {"featureName": "로그인", "learningGoals": ["Spring Boot 사용"]}}
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    goals = out["overview"]["learningGoals"]
+    assert len(goals) >= 3
+    joined = " ".join(goals)
+    assert "Controller" in joined
+    assert "DTO" in joined
+    assert "BCrypt" in joined or "해시" in joined
+    FeatureTemplateData(**out)
+
+
+def test_login_next_recommendations_dedupe_space_variants_and_resort(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    raw = {
+        "nextRecommendations": [
+            {
+                "featureName": "회원 가입",
+                "reason": "다음 학습",
+                "expectedLearning": "회원 가입을 학습",
+                "priority": 9,
+            },
+            {
+                "featureName": "회원가입",
+                "reason": "다음 학습",
+                "expectedLearning": "회원가입을 학습",
+                "priority": 9,
+            },
+            {
+                "featureName": "JWT 인증",
+                "reason": "토큰 인증",
+                "expectedLearning": "JWT 학습",
+                "priority": 9,
+            },
+        ]
+    }
+    out = FeatureTemplateNormalizer.normalize(raw, sample_request)
+    names = [item["featureName"] for item in out["nextRecommendations"]]
+    assert "회원 가입" not in names
+    assert names.count("회원가입") == 1
+    assert len(out["nextRecommendations"]) >= 3
+    assert [item["priority"] for item in out["nextRecommendations"]] == list(
+        range(1, len(out["nextRecommendations"]) + 1)
+    )
+    FeatureTemplateData(**out)
+
+
+def test_login_quality_normalization_keeps_login_final_guard(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    out = FeatureTemplateNormalizer.normalize({"codeFiles": []}, sample_request)
+    names = [f["fileName"] for f in out["codeFiles"]]
+    for required in (
+        "LoginController.java",
+        "LoginService.java",
+        "LoginRequest.java",
+        "LoginResponse.java",
+    ):
+        assert required in names
     FeatureTemplateData(**out)
