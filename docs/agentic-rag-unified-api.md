@@ -110,13 +110,24 @@ Content-Type: application/json
     "level": "beginner",
     "includeCode": true,
     "includeMissions": true,
-    "includeInterview": true
+    "includeInterview": true,
+    "referenceContext": {
+      "ragReferences": [
+        {
+          "title": "로그인 요구사항",
+          "source": "manual",
+          "content": "로그인은 이메일과 비밀번호를 입력받고 JWT를 발급한다."
+        }
+      ]
+    }
   },
   "useRag": false
 }
 ```
 
 `featureTemplate`을 생략하면 메시지에서 `language`, `featureName`, `level` 등을 **추론**합니다. 명시 필드를 쓰는 편이 안정적입니다.
+
+기능템플릿 생성용 `referenceContext`의 공식 입력 위치는 root-level이 아니라 **`featureTemplate.referenceContext`** 입니다. RAG 근거를 직접 전달할 때는 `featureTemplate.referenceContext.ragReferences` 배열에 넣습니다. root-level `referenceContext`는 API 계약에 포함하지 않습니다. `context` 필드는 기존처럼 `referenceContext.userContext` 성격의 보조 맥락으로 병합됩니다.
 
 선택 필드:
 
@@ -125,7 +136,7 @@ Content-Type: application/json
 | `message` | 필수. 자연어 요청 |
 | `context` | 선택. 챗봇 맥락 또는 `referenceContext.userContext` |
 | `useRag` | 선택. `true`이면 RAG 사용 시도 (서버 `RAG_ENABLED` 필요) |
-| `featureTemplate` | 선택. 기능템플릿 생성 시 구조화 입력 |
+| `featureTemplate` | 선택. 기능템플릿 생성 시 구조화 입력. 기능템플릿용 `referenceContext`는 이 객체 내부에 둔다. |
 
 ---
 
@@ -170,15 +181,27 @@ Content-Type: application/json
 | `references` | RAG 검색 근거 배열 (미사용 시 `[]`) |
 | `inferredFields` | 메시지에서 추론한 기능템플릿 필드 (`featureTemplate`을 명시한 경우 `{}`) |
 | `latencyMs` | `run_agentic_rag` 전체 처리 시간(ms) |
+| `toolCandidates` | 라우팅된 서비스·도구 후보 |
+| `intentReason` | intent 분류 근거 |
+| `handlerReason` | handler 선택 근거 |
+| `ragContextAvailable` | 프롬프트에 쓸 수 있는 RAG reference 존재 여부 |
+| `ragReferenceCount` | content가 유효하고 프롬프트 상한이 적용된 RAG reference 수 |
+| `appliedReferenceCount` | `data.result.appliedReferences` 길이 |
+| `fallbackUsed` | 결과 `source`가 `fallback`이면 `true` |
+| `source` | 결과 source (`ollama` 또는 `fallback`) |
+| `resultType` | 응답 `data.resultType`과 동일 |
+| `routeDecision` | intent → service 라우팅 요약 |
+| `executionMode` | 최상위 실행 모드 또는 하위 chat agent mode |
 
 chat 경로일 때 `data.result.agent.trace`에는 `/ai/chat`과 동일한 **하위** trace(`HybridIntentClassifier`, handler명, `toolCandidates` 등)가 추가로 포함될 수 있습니다.
 
 ### `source` 위치
 
-통합 trace에는 **`source` 필드가 없습니다**. LLM/폴백 출처는 다음에 있습니다.
+LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
 
 - chat: `data.result.source` (`ollama` \| `fallback`)
 - feature_template: `data.result.source` (`ollama` \| `fallback`)
+- trace: `data.trace.source`
 
 ---
 
