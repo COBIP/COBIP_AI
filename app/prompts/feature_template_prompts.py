@@ -56,6 +56,21 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - includeInterview 가 false 이면 interviewQuestions 는 반드시 빈 배열 [] 이다 (key 는 존재).
 - 위 플래그가 true 이면 해당 배열은 의미 있는 항목을 채운다 (아래 품질 기준).
 
+[최초 생성 경량화 — timeout 방지]
+- 이 최초 generate 응답은 "전체 구조를 빠르게 보여주는 템플릿"이다.
+- 상세 코드·상세 미션·상세 면접 답변은 이후 `/ai/feature-template/regenerate-section` 으로 보완할 수 있다.
+- 출력량을 늘리기 위해 보조 파일·설정 파일·장문 설명을 추가하지 않는다.
+- 각 문자열은 핵심만 담아 간결하게 작성한다. 불필요한 장문 서술은 금지한다.
+- 최초 생성에서는 아래 개수 상한을 지킨다:
+  * requirements: 3개
+  * flow.steps: 5개
+  * apiSpec: 1개, 필요 시 최대 2개
+  * codeFiles: includeCode==true 일 때 최대 4개
+  * basicQuestions: 3개
+  * missions: includeMissions==true 일 때 2개
+  * interviewQuestions: includeInterview==true 일 때 3개
+  * nextRecommendations: 3개
+
 [기능템플릿 고정 순서 — 절대 변경 금지]
 1. overview → 2. requirements → 3. flow → 4. apiSpec → 5. codeFiles
    → 6. basicQuestions → 7. missions → 8. interviewQuestions → 9. nextRecommendations
@@ -76,7 +91,7 @@ overview, requirements, flow, apiSpec, codeFiles, basicQuestions, missions, inte
 2) requirements (배열) — mock 나열 금지, 실무 관점으로 쪼갠다
    - 각 항목은 requirementId, name, description, inputValue, processCondition, successResult,
      failureResult, priority, relatedScreenOrApi 를 모두 채운다 (빈 칸·한 줄 복붙 금지).
-   - 최소 3개 이상 생성한다 (R-001, R-002 … ID 규칙 유지).
+   - 최소 3개 이상 생성한다. 최초 generate 에서는 정확히 3개만 생성한다 (R-001, R-002, R-003).
    - "기본 처리" 한 줄짜리 요구사항으로 끝내지 말고, 아래 관점을 기능에 맞게 **서로 다른 항목**으로 나눈다
      (로그인 예: 입력·검증·성공 처리·실패 처리·보안/예외 중 최소 3개 이상에 반영).
      * 입력 요구사항: 받는 값·형식 (inputValue, processCondition 에 구체 기술)
@@ -86,20 +101,23 @@ overview, requirements, flow, apiSpec, codeFiles, basicQuestions, missions, inte
    - relatedScreenOrApi 에는 실제 화면/API 이름을 짧게 연결한다.
 
 3) flow (객체) — 기능명·언어·techStack 에 맞춘 **구체적** 흐름
-   - steps: 문자열 배열, 5단계 이상. 고정 문장(예: "요청 받음"만 반복) 금지.
+   - steps: 문자열 배열, 5단계. 고정 문장(예: "요청 받음"만 반복) 금지.
      overview.featureName 과 user language·techStack 을 단계 문장에 **직접 언급**해 학습자가 따라 그릴 수 있게 쓴다.
    - layers: {{ "layer", "role" }} 배열. Controller / Service / Repository / DB 는 기본으로 두되,
      외부 API·메일·OAuth·결제 등 연동이 있으면 layer 이름과 role 에 명시한다.
 
 4) apiSpec (배열)
    - 각 항목은 apiName, method, endpoint, description, requestBody, responseBody, status 를 포함한다.
-   - 최소 1개 이상. 기능 성격에 맞게 CRUD, 인증·토큰 발급, 리소스 조회 등 **핵심 플로우** API 를 제안한다.
+   - 최소 1개 이상. 최초 generate 에서는 핵심 플로우 API 1개만 생성하고, 꼭 필요한 경우에만 최대 2개까지 생성한다.
    - requestBody 와 responseBody 는 **필드 예시가 담긴 JSON 객체**로 작성한다 (실제 키·값 타입이 드러나게;
      빈 객체 {{}} 나 placeholder 한 줄만 쓰지 말 것. 마크다운 펜스는 금지이나 JSON 내부 문자열은 허용).
 
 5) codeFiles (배열, includeCode==true 일 때만 내용 생성)
    - 각 항목: fileName, filePath, role, language, content
-   - content 는 핵심 흐름만 담은 예시 코드로, 과도하게 길지 않게 한다 (코드 펜스 ``` 금지).
+   - 최초 generate 에서는 핵심 파일만 생성한다. 상세 구현·예외 처리·설정 파일은 regenerate-section 에서 보완한다.
+   - codeFiles 는 최대 4개만 생성한다.
+   - Spring Boot 로그인 기능이면 LoginController.java, LoginService.java, LoginRequest.java, LoginResponse.java 4개를 우선 생성하고, SecurityConfig·Repository·Entity·Exception 등 보조 파일은 최초 generate 에서 만들지 않는다.
+   - content 는 핵심 흐름만 담은 짧은 예시 코드로, 파일당 20~40줄 이내를 목표로 한다 (코드 펜스 ``` 금지).
    - filePath 는 모르면 null 또는 빈 문자열로 둘 수 있다.
 
 6) basicQuestions (배열) — 흐름 이해 검증, 암기 위주 금지
@@ -109,7 +127,7 @@ overview, requirements, flow, apiSpec, codeFiles, basicQuestions, missions, inte
    - type 이 multiple_choice 가 아니면 choices 는 null.
 
 7) missions (배열, includeMissions==true 일 때만 내용 생성)
-   - includeMissions==true 이면 **missions 항목은 최소 2개 이상** 생성한다.
+   - includeMissions==true 이면 **missions 항목은 최소 2개 이상**이되, 최초 generate 에서는 정확히 2개만 생성한다.
    - 각 항목: missionId, title, description, missionType, requirements, successCriteria,
      relatedRequirements, difficulty (스키마 고정 필드만 사용).
    - 단순 설명 금지: 사용자가 코드를 **확장·수정·추가**하는 실습 과제로 쓴다.
@@ -119,7 +137,7 @@ overview, requirements, flow, apiSpec, codeFiles, basicQuestions, missions, inte
    - 완료 기준(successCriteria): 검증 가능한 문장으로 배열에 나열한다.
 
 8) interviewQuestions (배열, includeInterview==true 일 때만 내용 생성)
-   - includeInterview==true 이면 **interviewQuestions 는 최소 3개 이상** 생성한다.
+   - includeInterview==true 이면 **interviewQuestions 는 최소 3개 이상**이되, 최초 generate 에서는 정확히 3개만 생성한다.
    - 각 항목: questionId, question, keyPoints, sampleAnswer, relatedSection (스키마 고정).
    - 암기형 질문 금지. 실무 면접 수준: 계층 구조를 쓰는 이유, 예외 처리 위치, 보안 주의점,
      DTO·Entity 분리, 테스트 전략 등 **근거와 트레이드오프**를 묻는다.
@@ -128,7 +146,7 @@ overview, requirements, flow, apiSpec, codeFiles, basicQuestions, missions, inte
    - 난이도(difficulty) 전용 필드는 없으므로, 질문 난이도는 question 문장·sampleAnswer 깊이로 조절한다.
 
 9) nextRecommendations (배열)
-   - **최소 3개 이상** 추천한다 (부족하면 우선순위를 낮춘 항목까지 채운다).
+   - **최소 3개 이상** 추천한다. 최초 generate 에서는 정확히 3개만 추천한다.
    - 각 항목: featureName(다음에 학습할 기능 이름 = nextFeatureName 개념), reason, expectedLearning, priority(정수, 1이 가장 높음).
    - 현재 overview.featureName 이후 학습 경로에 **자연스럽게 이어질** 기능만 (예: 로그인 다음이면 JWT·회원가입·비밀번호 재설정 등은 참고일 뿐, 실제 출력은 요청 기능에 맞춘다).
    - 한 줄 제목(title) 느낌은 reason 의 첫 문장을 간결하게 쓴다 (title key 금지).
@@ -170,12 +188,15 @@ FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
 
 [지시]
 - 위 입력을 반드시 반영한다. overview.techStack 에 language 와 framework(미지정이 아니면)를 포함한다.
-- 요구사항(requirements)은 최소 3개 이상, 기본 문제(basicQuestions)는 최소 3개 이상, API(apiSpec)는 최소 1개 이상,
-  다음 추천(nextRecommendations)은 최소 3개 이상을 생성한다.
-- includeMissions가 true이면 missions는 최소 2개 이상, includeInterview가 true이면 interviewQuestions는 최소 3개 이상 생성한다.
+- 최초 generate 는 경량 구조 생성을 우선한다. 상세 보강은 regenerate-section 에서 수행할 수 있다.
+- 요구사항(requirements)은 최소 3개 이상이되 정확히 3개, 기본 문제(basicQuestions)는 정확히 3개,
+  API(apiSpec)는 핵심 1개(필요 시 최대 2개), 다음 추천(nextRecommendations)은 정확히 3개를 생성한다.
+- includeMissions가 true이면 missions는 최소 2개 이상이되 정확히 2개, includeInterview가 true이면 interviewQuestions는 최소 3개 이상이되 정확히 3개 생성한다.
   (플래그로 배열을 비우는 경우는 예외: includeCode/includeMissions/includeInterview 빈 배열 규칙이 우선.)
-- flow 는 featureName·language·techStack 을 반영한 구체적 단계로 steps 5개 이상, layers 는 역할·외부 연동까지 구체적으로 쓴다.
+- flow 는 featureName·language·techStack 을 반영한 구체적 단계로 steps 5개, layers 는 핵심 계층만 간결하게 쓴다.
 - apiSpec 의 requestBody·responseBody 는 필드 예시가 있는 JSON 객체로 채운다.
+- includeCode가 true이면 codeFiles는 최대 4개, 파일당 content는 20~40줄 이내의 핵심 코드만 작성한다.
+- Spring Boot 로그인 기능은 LoginController.java, LoginService.java, LoginRequest.java, LoginResponse.java 4개를 우선 생성하고 보조 파일은 최초 generate 에서 생략한다.
 - 출력은 단일 JSON 객체만 반환한다. (자유 텍스트·마크다운 코드블록·JSON 바깥 설명 금지)
 
 [출력 JSON 구조 — 반드시 이 형태와 동일한 key 만 사용]
