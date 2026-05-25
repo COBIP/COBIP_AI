@@ -203,6 +203,172 @@ def _reference_context_for_prompt_json(
     return out
 
 
+def _build_initial_generation_section_instructions(
+    request: FeatureTemplateGenerateRequest,
+) -> str:
+    """include flags에 따라 최초 generate용 섹션 지시만 짧게 조립한다."""
+
+    lines = [
+        "- 최초 generate는 전체 구조를 빠르게 보여주는 템플릿이다. 상세 보강은 regenerate-section에서 수행한다.",
+        "- overview: featureName, purpose, useCases, resultDescription, techStack, learningGoals를 짧게 채운다.",
+        "- requirements: 정확히 3개. 입력, 검증, 성공/실패/보안 관점으로 나눈다.",
+        "- flow: steps 정확히 5개, layers는 핵심 계층만 간결히 작성한다.",
+        "- apiSpec: 핵심 API 1개만 작성한다. requestBody/responseBody는 필드 예시가 있는 JSON 객체다.",
+        "- basicQuestions: 정확히 3개. type은 가능한 한 섞고 choices는 multiple_choice가 아니면 null이다.",
+        "- nextRecommendations: 정확히 3개만 추천한다.",
+    ]
+
+    if request.includeCode:
+        lines.append(
+            "- codeFiles: includeCode=true. 최대 4개, 파일당 content 20~40줄 이내. "
+            "Spring Boot 로그인은 LoginController.java, LoginService.java, "
+            "LoginRequest.java, LoginResponse.java 4개를 우선하고 보조 파일은 생략한다."
+        )
+    else:
+        lines.append(
+            "- codeFiles: includeCode=false 이므로 반드시 []만 반환한다. "
+            "코드 파일 내용과 코드 예시는 생성하지 않는다."
+        )
+
+    if request.includeMissions:
+        lines.append(
+            "- missions: includeMissions=true. 정확히 2개만 생성한다. "
+            "미션 목표는 description에 짧게 쓰고, 힌트는 requirements 배열에 넣는다."
+        )
+    else:
+        lines.append(
+            "- missions: includeMissions=false 이므로 반드시 []만 반환한다. "
+            "실습 미션 내용과 예시는 생성하지 않는다."
+        )
+
+    if request.includeInterview:
+        lines.append(
+            "- interviewQuestions: includeInterview=true. 정확히 3개만 생성한다. "
+            "keyPoints와 sampleAnswer는 짧게 쓴다."
+        )
+    else:
+        lines.append(
+            "- interviewQuestions: includeInterview=false 이므로 반드시 []만 반환한다. "
+            "면접 질문 내용과 예시는 생성하지 않는다."
+        )
+
+    lines.extend(
+        [
+            "- 모든 필드는 schema 이름을 그대로 사용한다. goal/hints/keywords/title 같은 단독 key는 금지한다.",
+            '- enum: difficulty는 "beginner"|"intermediate"|"advanced", basicQuestions.type은 허용값만 사용한다.',
+            '- 타입: requirements[].priority는 문자열, apiSpec[].status는 정수, flow.steps는 문자열 배열이다.',
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _build_initial_generation_json_skeleton(
+    request: FeatureTemplateGenerateRequest,
+) -> str:
+    """9개 top-level key를 유지하되 include flags에 따라 선택 섹션 예시는 제거한다."""
+
+    skeleton: dict[str, Any] = {
+        "overview": {
+            "featureName": request.featureName,
+            "purpose": "",
+            "useCases": [],
+            "resultDescription": "",
+            "techStack": [request.language]
+            + ([request.framework] if request.framework else []),
+            "learningGoals": [],
+        },
+        "requirements": [
+            {
+                "requirementId": "R-001",
+                "name": "",
+                "description": "",
+                "inputValue": "",
+                "processCondition": "",
+                "successResult": "",
+                "failureResult": "",
+                "priority": "HIGH",
+                "relatedScreenOrApi": "",
+            }
+        ],
+        "flow": {
+            "steps": ["1) 요청 수신", "2) 입력 검증", "3) 처리 실행", "4) 결과 생성", "5) 응답 반환"],
+            "layers": [{"layer": "Controller", "role": ""}],
+        },
+        "apiSpec": [
+            {
+                "apiName": "",
+                "method": "POST",
+                "endpoint": "/api/feature",
+                "description": "",
+                "requestBody": {"field": "value"},
+                "responseBody": {"data": {}},
+                "status": 200,
+            }
+        ],
+        "codeFiles": [],
+        "basicQuestions": [
+            {
+                "questionId": "Q-001",
+                "type": "multiple_choice",
+                "question": "",
+                "choices": ["A", "B", "C", "D"],
+                "answer": "",
+                "explanation": "",
+                "relatedSection": "requirements",
+                "difficulty": request.level.value,
+            }
+        ],
+        "missions": [],
+        "interviewQuestions": [],
+        "nextRecommendations": [
+            {
+                "featureName": "",
+                "reason": "",
+                "expectedLearning": "",
+                "priority": 1,
+            }
+        ],
+    }
+
+    if request.includeCode:
+        skeleton["codeFiles"] = [
+            {
+                "fileName": "LoginController.java",
+                "filePath": "src/main/java/com/example/auth/LoginController.java",
+                "role": "Controller",
+                "language": request.language,
+                "content": "짧은 핵심 코드",
+            }
+        ]
+
+    if request.includeMissions:
+        skeleton["missions"] = [
+            {
+                "missionId": "M-001",
+                "title": "",
+                "description": "미션 목표: 기능 흐름을 확장한다.",
+                "missionType": "implementation",
+                "requirements": [],
+                "successCriteria": [],
+                "relatedRequirements": [],
+                "difficulty": request.level.value,
+            }
+        ]
+
+    if request.includeInterview:
+        skeleton["interviewQuestions"] = [
+            {
+                "questionId": "IQ-001",
+                "question": "",
+                "keyPoints": [],
+                "sampleAnswer": "",
+                "relatedSection": "flow",
+            }
+        ]
+
+    return json.dumps(skeleton, ensure_ascii=False, indent=2)
+
+
 def build_feature_template_prompt_with_applied_rags(
     request: FeatureTemplateGenerateRequest,
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -244,6 +410,8 @@ def build_feature_template_prompt_with_applied_rags(
         includeInterview=str(request.includeInterview).lower(),
         ragContextSection=rag_context_section,
         referenceContext=reference_context_text,
+        sectionInstructions=_build_initial_generation_section_instructions(request),
+        jsonSkeleton=_build_initial_generation_json_skeleton(request),
     )
 
     prompt = f"{FEATURE_TEMPLATE_SYSTEM_PROMPT}\n\n{user_prompt}"
