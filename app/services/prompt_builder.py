@@ -16,6 +16,7 @@ from app.prompts.feature_template_prompts import (
     FEATURE_TEMPLATE_SYSTEM_PROMPT,
     FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE,
 )
+from app.core.config import settings
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
 __all__ = [
@@ -29,9 +30,16 @@ __all__ = [
 ]
 
 _RAG_CONTEXT_HEADER = "[검색 근거 / RAG Context]"
-_MAX_RAG_REFERENCES = 5
-_MAX_RAG_CONTENT_CHARS = 1000
+_MAX_RAG_REFERENCES = 5  # select_usable_rag_references 기본 상한(비기능템플릿 호출용)
 _CONTENT_PREVIEW_MAX_CHARS = 200  # 150~250자 권장 범위 내 기본값
+
+
+def _feature_template_rag_top_k() -> int:
+    return max(1, min(10, int(settings.FEATURE_TEMPLATE_RAG_TOP_K)))
+
+
+def _feature_template_rag_content_max_chars() -> int:
+    return max(50, int(settings.FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS))
 
 
 def select_usable_rag_references(
@@ -59,7 +67,7 @@ def select_usable_rag_references(
 def _format_rag_block_from_selected(
     selected: list[dict[str, Any]],
     *,
-    max_content_chars: int = _MAX_RAG_CONTENT_CHARS,
+    max_content_chars: int = _feature_template_rag_content_max_chars(),
 ) -> str:
     """select_usable_rag_references 결과만 받아 RAG Context 블록 문자열을 만든다."""
 
@@ -108,6 +116,23 @@ def _format_rag_block_from_selected(
     return f"{header}\n\n{intro}\n\n" + "\n\n".join(blocks)
 
 
+def _extract_applied_reference_metadata(raw: dict[str, Any]) -> dict[str, Any]:
+    """appliedReferences/trace용 optional 관측 필드 추출."""
+
+    meta = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+    out: dict[str, Any] = {}
+    for key in ("section", "docType", "path", "fileName"):
+        val = raw.get(key) if key in raw else meta.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = val.strip()
+    if meta.get("contentTruncated") is True:
+        out["contentTruncated"] = True
+    orig = meta.get("originalContentLength")
+    if isinstance(orig, int) and orig > 0:
+        out["originalContentLength"] = orig
+    return out
+
+
 def build_applied_references_payload(
     selected: list[dict[str, Any]],
     *,
@@ -144,6 +169,8 @@ def build_applied_references_payload(
         if isinstance(sc, (int, float)):
             item["score"] = sc
 
+        item.update(_extract_applied_reference_metadata(raw))
+
         out.append(item)
     return out
 
@@ -152,7 +179,7 @@ def format_rag_references_for_feature_template_prompt(
     references: list[Any],
     *,
     max_items: int = _MAX_RAG_REFERENCES,
-    max_content_chars: int = _MAX_RAG_CONTENT_CHARS,
+    max_content_chars: int = _feature_template_rag_content_max_chars(),
 ) -> str:
     """RAG 검색 결과를 기능템플릿 user 프롬프트용 블록으로 포맷한다.
 
@@ -342,10 +369,13 @@ def build_feature_template_prompt_with_applied_rags(
     framework_text = request.framework if request.framework else "(미지정)"
 
     rag_refs = _extract_rag_references_from_reference_context(request.referenceContext)
-    selected = select_usable_rag_references(rag_refs)
+    selected = select_usable_rag_references(
+        rag_refs,
+        max_items=_feature_template_rag_top_k(),
+    )
     rag_body = _format_rag_block_from_selected(
         selected,
-        max_content_chars=_MAX_RAG_CONTENT_CHARS,
+        max_content_chars=_feature_template_rag_content_max_chars(),
     )
     applied = build_applied_references_payload(selected)
     rag_context_section = f"\n\n{rag_body}" if rag_body else ""

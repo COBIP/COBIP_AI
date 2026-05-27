@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     RAG_ENABLED: bool = False
     RAG_TOP_K: int = 3
 
+    # Agentic RAG 15차: 기능템플릿 전용 RAG 검색·프롬프트 방어 파라미터
+    FEATURE_TEMPLATE_RAG_TOP_K: int = 3
+    FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS: int = 1000
+
     # Agent /ai/chat: 룰 기본, 선택적 LLM intent 보조
     AGENT_LLM_INTENT_ENABLED: bool = False
     AGENT_LLM_INTENT_REFINE_GENERAL: bool = False
