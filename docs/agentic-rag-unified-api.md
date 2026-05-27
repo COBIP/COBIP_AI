@@ -208,8 +208,42 @@ Content-Type: application/json
 | `ragSource` | `manual` \| `qdrant` \| `manual+qdrant` \| `none` |
 | `ragFailureReason` | 자동 retrieval 실패 사유 요약 (실패 시) |
 | `ragRetrievalSkippedReason` | 자동 retrieval을 시도하지 않은 사유 (예: `rag_disabled`, `empty_query`) |
+| `ragRetrievalMs` | Qdrant 검색+embedding 포함 retrieval 소요(ms) |
+| `featureTemplateGenerationMs` | FeatureTemplateGenerator.generate 소요(ms) |
+| `totalLatencyMs` | feature_template 경로 전체 소요(ms). `latencyMs`와 동일 |
+| `ragRetrievalMs` | 15차: Qdrant 검색+embedding 포함 자동 RAG retrieval 소요(ms). 스킵/실패 시 0 |
+| `featureTemplateGenerationMs` | 15차: `FeatureTemplateGenerator.generate` 실행 소요(ms) |
+| `totalLatencyMs` | 15차: feature_template 경로 전체 소요(ms). `latencyMs`와 동일 |
 
 chat 경로일 때 `data.result.agent.trace`에는 `/ai/chat`과 동일한 **하위** trace(`HybridIntentClassifier`, handler명, `toolCandidates` 등)가 추가로 포함될 수 있습니다.
+
+### 기능템플릿 RAG 관측성·시연 안정성 (15차)
+
+교수 시연/발표에서 **병목이 RAG 검색인지 LLM 생성인지** 구분할 수 있도록 trace에 시간을 분리했습니다. Qdrant 검색은 `FEATURE_TEMPLATE_RAG_TOP_K`와 `FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS`로 prompt가 과도하게 커지지 않도록 제어합니다.
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `FEATURE_TEMPLATE_RAG_TOP_K` | `3` | 기능템플릿 Qdrant top_k 및 프롬프트 주입 reference 상한 |
+| `FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS` | `1000` | ragReference content 최대 길이. 초과 시 잘림 + `contentTruncated` metadata |
+
+**RAG ON/OFF 비교 시 확인 필드**
+
+| 상황 | 확인 필드 |
+| --- | --- |
+| RAG 비활성 (`RAG_ENABLED=false`) | `ragRetrievalAttempted=false`, `ragRetrievalStatus=skipped`, `ragRetrievalSkippedReason=rag_disabled`, `ragRetrievalMs=0` |
+| RAG 활성 + seed 적재 완료 | `ragRetrievalAttempted=true`, `ragRetrievalStatus=success`, `ragSource=qdrant`, `ragRetrievedCount`/`ragInjectedCount`/`appliedReferenceCount` > 0 |
+| RAG 활성 + collection 비어 있음 | `ragRetrievalStatus=empty`, `ragInjectedCount=0`, 기능템플릿 생성은 계속 성공 |
+| RAG 실패 (Qdrant/embedding) | `ragRetrievalStatus=failed`, `ragFailureReason` 확인, `featureTemplateGenerationMs`로 LLM 구간은 별도 측정 |
+
+**교수 시연 체크 포인트 (짧게)**
+
+1. `trace.ragRetrievalMs` — RAG 검색+embedding 구간 (보통 수백 ms 이하)
+2. `trace.featureTemplateGenerationMs` — LLM skeleton 생성 구간 (대부분의 전체 시간)
+3. `trace.totalLatencyMs` (= `latencyMs`) — 전체 요청 시간
+4. `trace.ragSource` / `ragInjectedCount` / `appliedReferenceCount` — 어떤 reference가 몇 건 주입됐는지
+5. `result.appliedReferences[]` — `title`, `source`, `score`, `section`, `docType`, `path`, `contentPreview`(≤200자)
+
+> 시연 설명 예: "현재 병목이 RAG 검색인지 LLM 생성인지 구분하기 위해 trace에 `ragRetrievalMs`와 `featureTemplateGenerationMs`를 분리했습니다. Qdrant 검색은 top_k와 content 길이를 제한해서 prompt가 과도하게 커지지 않도록 했고, 기능템플릿은 skeleton-first 방식으로 먼저 핵심 구조를 빠르게 생성한 뒤 코드/미션/면접은 regenerate-section으로 분리합니다."
 
 ### `source` 위치
 
@@ -230,7 +264,8 @@ LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
 - **Retriever**: `app/services/retriever_service.py`의 `RetrieverService`를 그대로 재사용합니다(`QdrantService` + `EmbeddingService`). 본 13차에서는 RetrieverService를 새로 만들지 않고 기존 구현을 그대로 활용합니다.
 - **활성 조건**: 서버 `RAG_ENABLED=true`. `RAG_ENABLED=false`인 경우 retrieval을 시도하지 않고 `trace.ragRetrievalSkippedReason="rag_disabled"`로 기록합니다.
 - **Query 구성**: `{framework} {featureName} {language} {level} 기능템플릿 요구사항 API 코드 학습` 뒤에 `message`의 앞 160자를 붙입니다. 전체 길이는 256자로 제한합니다.
-- **Hit → ragReference 변환**: `{ "title", "source": "qdrant", "content", "sourceType?", "score?", "metadata?" }`. `title`이 없으면 metadata의 `docType` / `section` / `fileName` / `path` / `url` 순으로 채웁니다. `content`는 1000자로 제한합니다.
+- **Hit → ragReference 변환**: `{ "title", "source": "qdrant", "content", "sourceType?", "score?", "metadata?" }`. `title`이 없으면 metadata의 `docType` / `section` / `fileName` / `path` / `url` 순으로 채웁니다. `content`는 `FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS`(기본 1000)로 제한하며, 잘린 경우 metadata에 `contentTruncated` / `originalContentLength`를 남깁니다.
+- **검색 개수**: `FEATURE_TEMPLATE_RAG_TOP_K`(기본 3)로 Qdrant top_k와 프롬프트 주입 상한을 제어합니다.
 - **수동 reference 우선**: 수동 `ragReferences`는 절대 덮어쓰지 않고 그대로 prompt에 들어갑니다.
 - **Dedupe**: `title + content 앞 100자`(공백 정규화·소문자) 기준으로 중복 제거합니다. 출처(`source`)는 키에 포함하지 않아서, 같은 문서가 manual/qdrant 두 채널로 들어와도 한 번만 주입됩니다.
 - **Graceful fallback**: Qdrant 미기동, 컬렉션 없음, embedding 실패, 결과 0개, payload 이상 등 어떤 단계 실패도 호출자에게 예외를 던지지 않습니다. 기능템플릿 생성은 그대로 계속 진행되고 실패/스킵 사유는 `trace.ragFailureReason` / `trace.ragRetrievalSkippedReason`에 기록됩니다.

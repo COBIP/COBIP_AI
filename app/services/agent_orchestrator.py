@@ -282,10 +282,12 @@ class AgentOrchestrator:
             level=feature_request.level.value if feature_request.level else None,
         )
         steps.append("rag_retrieval_attempted")
+        rag_t0 = time.perf_counter()
         retrieval = retrieve_feature_template_rag_references(
             query=retrieval_query,
-            top_k=settings.RAG_TOP_K,
+            top_k=settings.FEATURE_TEMPLATE_RAG_TOP_K,
         )
+        rag_retrieval_ms = max(0, int((time.perf_counter() - rag_t0) * 1000))
         if retrieval.status == "success":
             steps.append("rag_retrieval_success")
         elif retrieval.status == "empty":
@@ -325,7 +327,11 @@ class AgentOrchestrator:
         else:
             rag_source_label = "none"
 
+        gen_t0 = time.perf_counter()
         result = FeatureTemplateGenerator().generate(feature_request)
+        feature_template_generation_ms = max(
+            0, int((time.perf_counter() - gen_t0) * 1000)
+        )
         steps.append("feature_template_generate_execution")
         latency_ms = max(0, int((time.perf_counter() - t0) * 1000))
         source = str(result.source)
@@ -366,6 +372,9 @@ class AgentOrchestrator:
             ragSource=rag_source_label,
             ragFailureReason=retrieval.failure_reason,
             ragRetrievalSkippedReason=retrieval.skipped_reason,
+            ragRetrievalMs=rag_retrieval_ms,
+            featureTemplateGenerationMs=feature_template_generation_ms,
+            totalLatencyMs=latency_ms,
         )
         return AgenticRagResponseData(
             intent=IntentType.FEATURE_TEMPLATE_GENERATE,

@@ -24,6 +24,8 @@ __all__ = [
     "FeatureTemplateRagRetrieval",
     "RetrieverProtocol",
     "build_feature_template_retrieval_query",
+    "effective_feature_template_rag_top_k",
+    "feature_template_rag_content_max_chars",
     "merge_manual_and_auto_rag_references",
     "retrieve_feature_template_rag_references",
 ]
@@ -31,9 +33,23 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _AUTO_REF_SOURCE = "qdrant"
-_MAX_CONTENT_CHARS = 1000
 _MAX_QUERY_CHARS = 256
 _MAX_MESSAGE_SNIPPET = 160
+_MIN_CONTENT_MAX_CHARS = 50
+_MAX_TOP_K = 10
+
+
+def feature_template_rag_content_max_chars() -> int:
+    """기능템플릿 RAG reference content 최대 길이(환경변수 기반)."""
+
+    return max(_MIN_CONTENT_MAX_CHARS, int(settings.FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS))
+
+
+def effective_feature_template_rag_top_k(top_k: int | None = None) -> int:
+    """기능템플릿 RAG 검색 top_k (1~10, 기본 settings.FEATURE_TEMPLATE_RAG_TOP_K)."""
+
+    k = top_k if top_k is not None else settings.FEATURE_TEMPLATE_RAG_TOP_K
+    return max(1, min(_MAX_TOP_K, int(k)))
 
 RagRetrievalStatus = Literal["success", "empty", "skipped", "failed"]
 RagSourceLabel = Literal["manual", "qdrant", "manual+qdrant", "none"]
@@ -119,8 +135,12 @@ def _hit_to_reference(hit_dict: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(content, str) or not content.strip():
         return None
     body = content.strip()
-    if len(body) > _MAX_CONTENT_CHARS:
-        body = body[: _MAX_CONTENT_CHARS - 1] + "…"
+    max_chars = feature_template_rag_content_max_chars()
+    truncated = False
+    original_len = len(body)
+    if len(body) > max_chars:
+        body = body[: max_chars - 1] + "…"
+        truncated = True
 
     metadata_raw = hit_dict.get("metadata")
     metadata: dict[str, Any] = metadata_raw if isinstance(metadata_raw, dict) else {}
@@ -154,6 +174,9 @@ def _hit_to_reference(hit_dict: dict[str, Any]) -> dict[str, Any] | None:
         mv = metadata.get(key)
         if isinstance(mv, str) and mv.strip():
             keep_meta[key] = mv.strip()
+    if truncated:
+        keep_meta["contentTruncated"] = True
+        keep_meta["originalContentLength"] = original_len
     if keep_meta:
         out["metadata"] = keep_meta
     return out
@@ -211,7 +234,7 @@ def retrieve_feature_template_rag_references(
                 failure_reason=f"retriever_init_failed:{type(exc).__name__}",
             )
 
-    effective_top_k = top_k if top_k is not None else settings.RAG_TOP_K
+    effective_top_k = effective_feature_template_rag_top_k(top_k)
     try:
         raw_hits = used_retriever.retrieve(q, effective_top_k)
     except Exception as exc:

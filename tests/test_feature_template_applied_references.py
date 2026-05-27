@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.core.config import settings
 from app.models.enums import DifficultyLevel
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 from app.services.feature_template_generator import FeatureTemplateGenerator
@@ -108,15 +109,16 @@ def test_empty_content_reference_excluded_from_prompt_and_applied() -> None:
     assert len(applied) == 1
 
 
-def test_max_five_references_applied_and_in_prompt() -> None:
+def test_feature_template_top_k_limits_applied_and_in_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_RAG_TOP_K", 3)
     refs = [
         {"title": f"T{i}", "content": f"body{i} " * 5, "source": "s"}
         for i in range(6)
     ]
     selected = select_usable_rag_references(refs)
     assert len(selected) == 5
-    applied = build_applied_references_payload(selected)
-    assert len(applied) == 5
     req = FeatureTemplateGenerateRequest(
         language="java",
         featureName="x",
@@ -124,8 +126,12 @@ def test_max_five_references_applied_and_in_prompt() -> None:
         referenceContext={"ragReferences": refs},
     )
     prompt, applied2 = build_feature_template_prompt_with_applied_rags(req)
-    assert len(applied2) == 5
-    assert prompt.count("   제목:") == 5
+    assert len(applied2) == 3
+    assert prompt.count("   제목:") == 3
+    applied = build_applied_references_payload(
+        select_usable_rag_references(refs, max_items=3)
+    )
+    assert len(applied) == 3
 
 
 def test_content_preview_respects_max_length() -> None:

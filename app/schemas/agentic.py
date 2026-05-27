@@ -145,6 +145,22 @@ class AgenticRagTrace(BaseModel):
         default=None,
         description="자동 retrieval을 시도하지 않은 사유 (예: rag_disabled, empty_query)",
     )
+    # Agentic RAG 15차 — RAG/LLM 시간 분리 관측
+    ragRetrievalMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="Qdrant 검색+embedding 포함 자동 RAG retrieval 소요(ms). 스킵/실패 시 0",
+    )
+    featureTemplateGenerationMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="FeatureTemplateGenerator.generate 실행 소요(ms)",
+    )
+    totalLatencyMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="run_agentic_rag feature_template 경로 전체 소요(ms). latencyMs와 동일",
+    )
 
 
 class AgenticRagResponseData(BaseModel):
