@@ -245,6 +245,45 @@ chat 경로일 때 `data.result.agent.trace`에는 `/ai/chat`과 동일한 **하
 
 > 시연 설명 예: "현재 병목이 RAG 검색인지 LLM 생성인지 구분하기 위해 trace에 `ragRetrievalMs`와 `featureTemplateGenerationMs`를 분리했습니다. Qdrant 검색은 top_k와 content 길이를 제한해서 prompt가 과도하게 커지지 않도록 했고, 기능템플릿은 skeleton-first 방식으로 먼저 핵심 구조를 빠르게 생성한 뒤 코드/미션/면접은 regenerate-section으로 분리합니다."
 
+### 성능 개선 1차 (16차)
+
+16차부터는 **retrieval 세부 timing**, **embedding warm-up**, **Redis cache(선택적)** 를 추가해 반복 요청 체감 성능과 관측성을 강화합니다.
+
+추가 env 설정 (기본값은 모두 안전 모드):
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `EMBEDDING_WARMUP_ENABLED` | `false` | 서버 시작 시 임베딩 warm-up 시도 여부 |
+| `EMBEDDING_WARMUP_TEXT` | `"Spring Boot 로그인 기능템플릿 RAG warm up"` | warm-up 임베딩 텍스트 |
+| `RAG_RETRIEVAL_CACHE_ENABLED` | `false` | feature_template_generate 경로의 자동 RAG retrieval 결과 캐시 |
+| `RAG_RETRIEVAL_CACHE_TTL_SECONDS` | `3600` | retrieval cache TTL |
+| `FEATURE_TEMPLATE_CACHE_ENABLED` | `false` | skeleton-first 최초 generate 결과 캐시 |
+| `FEATURE_TEMPLATE_CACHE_TTL_SECONDS` | `3600` | feature template cache TTL |
+
+동작 원칙:
+
+- Redis가 없거나 연결 실패해도 요청은 실패하지 않으며 기존 흐름으로 계속 동작합니다 (graceful fallback).
+- retrieval cache key: `rag:feature-template:v1:{sha256...}`
+- feature template cache key: `feature-template:skeleton:v1:{sha256...}`
+- fallback 결과(`source=fallback`)는 feature template cache에 저장하지 않습니다.
+
+16차 추가 trace 필드:
+
+| 필드 | 설명 |
+| --- | --- |
+| `embeddingMs` | 임베딩 생성 소요(ms) |
+| `qdrantSearchMs` | Qdrant 검색 소요(ms) |
+| `referenceBuildMs` | hit → ragReferences 변환/정리 소요(ms) |
+| `ragCacheHit` | retrieval cache hit 여부 |
+| `ragCacheKey` | retrieval cache key |
+| `featureTemplateCacheHit` | skeleton cache hit 여부 |
+| `featureTemplateCacheKey` | skeleton cache key |
+
+cache hit 예시:
+
+- `ragCacheHit=true` 이면 `embeddingMs=0`, `qdrantSearchMs=0`, `referenceBuildMs=0`
+- `featureTemplateCacheHit=true` 이면 `featureTemplateGenerationMs=0` (LLM generate 생략)
+
 ### `source` 위치
 
 LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.

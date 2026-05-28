@@ -7,3 +7,4 @@ httpx
 qdrant-client
 sentence-transformers
 pytest
+redis

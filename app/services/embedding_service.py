@@ -22,11 +22,31 @@ logger = logging.getLogger(__name__)
 class EmbeddingService:
     """BGE-M3 등 설정 모델로 문장 임베딩 (GPU 미강제)."""
 
+    _shared_model: "SentenceTransformer | None" = None
+    _shared_model_lock = threading.Lock()
+
     def __init__(self) -> None:
         self._model: SentenceTransformer | None = None
         self._model_lock = threading.Lock()
 
     def _get_model(self) -> "SentenceTransformer":
+        if EmbeddingService._shared_model is not None:
+            return EmbeddingService._shared_model
+
+        # shared model을 우선 사용해 요청마다 모델 재초기화를 막는다.
+        with EmbeddingService._shared_model_lock:
+            if EmbeddingService._shared_model is not None:
+                return EmbeddingService._shared_model
+
+            from sentence_transformers import SentenceTransformer
+
+            name = settings.EMBEDDING_MODEL
+            logger.info("embedding model load model=%s", name)
+            EmbeddingService._shared_model = SentenceTransformer(name, device=None)
+            return EmbeddingService._shared_model
+
+    def _get_model_legacy_lock(self) -> "SentenceTransformer":
+        """하위 호환용: 인스턴스 잠금 경로 (테스트 안전)."""
         with self._model_lock:
             if self._model is None:
                 from sentence_transformers import SentenceTransformer
@@ -68,3 +88,16 @@ class EmbeddingService:
 
     def embed_query(self, query: str) -> list[float]:
         return self.embed_text(query)
+
+    def warm_up(self, text: str | None = None) -> bool:
+        """임베딩 모델 warm-up. 실패해도 예외 대신 False를 반환한다."""
+
+        try:
+            target = self.normalize_text(text or settings.EMBEDDING_WARMUP_TEXT)
+            if not target:
+                target = "warmup"
+            _ = self.embed_query(target)
+            return True
+        except Exception as exc:  # pragma: no cover - runtime 환경 의존
+            logger.warning("embedding warmup failed errorType=%s", type(exc).__name__)
+            return False

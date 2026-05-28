@@ -13,18 +13,23 @@ RetrieverService 결과를 `referenceContext.ragReferences` 형태로 변환하�
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import time
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import settings
+from app.services.cache_service import CacheService
 
 __all__ = [
     "FeatureTemplateRagRetrieval",
     "RetrieverProtocol",
     "build_feature_template_retrieval_query",
     "effective_feature_template_rag_top_k",
+    "build_feature_template_rag_cache_key",
     "feature_template_rag_content_max_chars",
     "merge_manual_and_auto_rag_references",
     "retrieve_feature_template_rag_references",
@@ -74,6 +79,11 @@ class FeatureTemplateRagRetrieval(BaseModel):
     retrieved_count: int = Field(default=0, ge=0)
     failure_reason: str | None = None
     skipped_reason: str | None = None
+    embedding_ms: int = 0
+    qdrant_search_ms: int = 0
+    reference_build_ms: int = 0
+    cache_hit: bool = False
+    cache_key: str | None = None
 
 
 def build_feature_template_retrieval_query(
@@ -188,6 +198,7 @@ def retrieve_feature_template_rag_references(
     top_k: int | None = None,
     enabled: bool | None = None,
     retriever: RetrieverProtocol | None = None,
+    cache_service: CacheService | None = None,
 ) -> FeatureTemplateRagRetrieval:
     """기능템플릿 자동 RAG retrieval. 어떤 단계에서 실패해도 예외를 다시 던지지 않는다."""
 
@@ -203,6 +214,9 @@ def retrieve_feature_template_rag_references(
             query=q or None,
             retrieved_count=0,
             skipped_reason="rag_disabled",
+            embedding_ms=0,
+            qdrant_search_ms=0,
+            reference_build_ms=0,
         )
     if not q:
         return FeatureTemplateRagRetrieval(
@@ -212,7 +226,33 @@ def retrieve_feature_template_rag_references(
             query=None,
             retrieved_count=0,
             skipped_reason="empty_query",
+            embedding_ms=0,
+            qdrant_search_ms=0,
+            reference_build_ms=0,
         )
+
+    used_cache = cache_service or CacheService()
+    cache_key = build_feature_template_rag_cache_key(
+        query=q,
+        top_k=effective_feature_template_rag_top_k(top_k),
+    )
+    if settings.RAG_RETRIEVAL_CACHE_ENABLED:
+        cached = used_cache.get_json(cache_key)
+        if isinstance(cached, dict):
+            refs = cached.get("references")
+            if isinstance(refs, list):
+                return FeatureTemplateRagRetrieval(
+                    attempted=True,
+                    status=str(cached.get("status") or "success"),
+                    references=[r for r in refs if isinstance(r, dict)],
+                    query=q,
+                    retrieved_count=int(cached.get("retrieved_count") or len(refs)),
+                    embedding_ms=0,
+                    qdrant_search_ms=0,
+                    reference_build_ms=0,
+                    cache_hit=True,
+                    cache_key=cache_key,
+                )
 
     used_retriever = retriever
     if used_retriever is None:
@@ -232,11 +272,21 @@ def retrieve_feature_template_rag_references(
                 query=q,
                 retrieved_count=0,
                 failure_reason=f"retriever_init_failed:{type(exc).__name__}",
+                cache_hit=False,
+                cache_key=cache_key if settings.RAG_RETRIEVAL_CACHE_ENABLED else None,
             )
 
     effective_top_k = effective_feature_template_rag_top_k(top_k)
+    embedding_ms = 0
+    qdrant_search_ms = 0
     try:
-        raw_hits = used_retriever.retrieve(q, effective_top_k)
+        if hasattr(used_retriever, "retrieve_with_timing"):
+            timing_result = used_retriever.retrieve_with_timing(q, effective_top_k)
+            raw_hits = timing_result.references
+            embedding_ms = int(getattr(timing_result, "embeddingMs", 0) or 0)
+            qdrant_search_ms = int(getattr(timing_result, "qdrantSearchMs", 0) or 0)
+        else:
+            raw_hits = used_retriever.retrieve(q, effective_top_k)
     except Exception as exc:
         logger.warning(
             "feature_template rag retrieve failed errorType=%s",
@@ -249,10 +299,16 @@ def retrieve_feature_template_rag_references(
             query=q,
             retrieved_count=0,
             failure_reason=f"retrieve_failed:{type(exc).__name__}",
+            embedding_ms=embedding_ms,
+            qdrant_search_ms=qdrant_search_ms,
+            reference_build_ms=0,
+            cache_hit=False,
+            cache_key=cache_key if settings.RAG_RETRIEVAL_CACHE_ENABLED else None,
         )
 
     refs: list[dict[str, Any]] = []
     hit_count = 0
+    t_ref = time.perf_counter()
     for hit in raw_hits or []:
         hit_count += 1
         coerced = _coerce_hit_to_dict(hit)
@@ -262,15 +318,46 @@ def retrieve_feature_template_rag_references(
         if ref is None:
             continue
         refs.append(ref)
+    reference_build_ms = max(0, int((time.perf_counter() - t_ref) * 1000))
 
     status: RagRetrievalStatus = "success" if refs else "empty"
-    return FeatureTemplateRagRetrieval(
+    out = FeatureTemplateRagRetrieval(
         attempted=True,
         status=status,
         references=refs,
         query=q,
         retrieved_count=hit_count,
+        embedding_ms=embedding_ms,
+        qdrant_search_ms=qdrant_search_ms,
+        reference_build_ms=reference_build_ms,
+        cache_hit=False,
+        cache_key=cache_key if settings.RAG_RETRIEVAL_CACHE_ENABLED else None,
     )
+    if settings.RAG_RETRIEVAL_CACHE_ENABLED:
+        used_cache.set_json(
+            cache_key,
+            {
+                "status": status,
+                "references": refs,
+                "retrieved_count": hit_count,
+            },
+            settings.RAG_RETRIEVAL_CACHE_TTL_SECONDS,
+        )
+    return out
+
+
+def build_feature_template_rag_cache_key(*, query: str, top_k: int) -> str:
+    payload = {
+        "query": query,
+        "top_k": top_k,
+        "content_max_chars": feature_template_rag_content_max_chars(),
+        "collection": settings.QDRANT_COLLECTION,
+        "embedding_model": settings.EMBEDDING_MODEL,
+        "version": "v1",
+    }
+    normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+    return f"rag:feature-template:v1:{digest}"
 
 
 def _ref_dedupe_key(ref: dict[str, Any]) -> str:
