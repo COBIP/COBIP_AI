@@ -15,7 +15,11 @@ from app.schemas.agentic import (
     AgenticRagTrace,
 )
 from app.schemas.chat import AgentPayload, AgentTrace, ChatRequest, ChatResponseData
-from app.schemas.feature_template import FeatureTemplateGenerateRequest
+from app.schemas.feature_template import (
+    FeatureTemplateData,
+    FeatureTemplateGenerateRequest,
+    FeatureTemplateGenerateResult,
+)
 from app.services.agent_handlers import (
     FeatureTemplateHelpHandler,
     GeneralChatHandler,
@@ -24,6 +28,7 @@ from app.services.agent_handlers import (
 )
 from app.services.agent_router import AgentRouter
 from app.services.agent_tools import AgentToolRegistry
+from app.services.cache_service import CacheService
 from app.services.feature_template_generator import FeatureTemplateGenerator
 from app.services.intent_classifier import AgentIntent, HybridIntentClassifier
 from app.services.retriever_service import RetrieverService
@@ -266,6 +271,7 @@ class AgentOrchestrator:
             request,
             references=references,
         )
+        cache_service = CacheService()
         steps.append("feature_template_request_resolution")
 
         # 13차: feature_template_generate 경로 자체 retrieval
@@ -286,6 +292,7 @@ class AgentOrchestrator:
         retrieval = retrieve_feature_template_rag_references(
             query=retrieval_query,
             top_k=settings.FEATURE_TEMPLATE_RAG_TOP_K,
+            cache_service=cache_service,
         )
         rag_retrieval_ms = max(0, int((time.perf_counter() - rag_t0) * 1000))
         if retrieval.status == "success":
@@ -327,12 +334,61 @@ class AgentOrchestrator:
         else:
             rag_source_label = "none"
 
+        feature_template_cache_key: str | None = None
+        feature_template_cache_hit = False
+        result: FeatureTemplateGenerateResult | None = None
+
+        if settings.FEATURE_TEMPLATE_CACHE_ENABLED:
+            feature_template_cache_key = self._build_feature_template_cache_key(
+                feature_request=feature_request,
+                rag_references=usable_rag,
+            )
+            cached_ft = cache_service.get_json(feature_template_cache_key)
+            if isinstance(cached_ft, dict):
+                try:
+                    result = FeatureTemplateGenerateResult(
+                        template=FeatureTemplateData(**(cached_ft.get("template") or {})),
+                        source=str(cached_ft.get("source") or "fallback"),
+                        appliedReferences=list(cached_ft.get("appliedReferences") or []),
+                        generationMode=str(cached_ft.get("generationMode") or "skeleton"),
+                        skeletonFirst=bool(cached_ft.get("skeletonFirst", True)),
+                        deferredSections=list(
+                            cached_ft.get("deferredSections")
+                            or ["codeFiles", "missions", "interviewQuestions"]
+                        ),
+                    )
+                    feature_template_cache_hit = True
+                    steps.append("feature_template_cache_hit")
+                except Exception:
+                    result = None
+
         gen_t0 = time.perf_counter()
-        result = FeatureTemplateGenerator().generate(feature_request)
-        feature_template_generation_ms = max(
-            0, int((time.perf_counter() - gen_t0) * 1000)
+        if result is None:
+            result = FeatureTemplateGenerator().generate(feature_request)
+            if feature_template_cache_key and result.source != "fallback":
+                cache_service.set_json(
+                    feature_template_cache_key,
+                    {
+                        "template": result.template.model_dump(),
+                        "source": result.source,
+                        "appliedReferences": result.appliedReferences,
+                        "generationMode": result.generationMode,
+                        "skeletonFirst": result.skeletonFirst,
+                        "deferredSections": result.deferredSections,
+                    },
+                    settings.FEATURE_TEMPLATE_CACHE_TTL_SECONDS,
+                )
+            if feature_template_cache_key and not feature_template_cache_hit:
+                steps.append("feature_template_cache_miss")
+            steps.append("feature_template_generate_execution")
+        else:
+            steps.append("feature_template_generate_cached")
+
+        feature_template_generation_ms = (
+            0
+            if feature_template_cache_hit
+            else max(0, int((time.perf_counter() - gen_t0) * 1000))
         )
-        steps.append("feature_template_generate_execution")
         latency_ms = max(0, int((time.perf_counter() - t0) * 1000))
         source = str(result.source)
         applied_count = len(result.appliedReferences)
@@ -375,6 +431,13 @@ class AgentOrchestrator:
             ragRetrievalMs=rag_retrieval_ms,
             featureTemplateGenerationMs=feature_template_generation_ms,
             totalLatencyMs=latency_ms,
+            embeddingMs=retrieval.embedding_ms,
+            qdrantSearchMs=retrieval.qdrant_search_ms,
+            referenceBuildMs=retrieval.reference_build_ms,
+            ragCacheHit=retrieval.cache_hit,
+            ragCacheKey=retrieval.cache_key,
+            featureTemplateCacheHit=feature_template_cache_hit,
+            featureTemplateCacheKey=feature_template_cache_key,
         )
         return AgenticRagResponseData(
             intent=IntentType.FEATURE_TEMPLATE_GENERATE,
@@ -390,6 +453,26 @@ class AgentOrchestrator:
             },
             trace=trace,
         )
+
+    @staticmethod
+    def _build_feature_template_cache_key(
+        *,
+        feature_request: FeatureTemplateGenerateRequest,
+        rag_references: list[dict[str, Any]],
+    ) -> str:
+        cache_service = CacheService()
+        payload = {
+            "language": feature_request.language,
+            "framework": feature_request.framework,
+            "featureName": feature_request.featureName,
+            "level": feature_request.level.value if feature_request.level else None,
+            "includeCode": feature_request.includeCode,
+            "includeMissions": feature_request.includeMissions,
+            "includeInterview": feature_request.includeInterview,
+            "ragReferences": rag_references,
+            "version": "v1",
+        }
+        return cache_service.build_hashed_key("feature-template:skeleton:v1", payload)
 
     @staticmethod
     def _classify_agentic_intent_with_reason(

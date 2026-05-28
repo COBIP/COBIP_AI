@@ -6,14 +6,17 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.schemas.rag import RetrievedReference
 from app.services.embedding_service import EmbeddingService
 from app.services.qdrant_service import QdrantService
 
-__all__ = ["RetrieverService"]
+__all__ = ["RetrieverService", "RetrieverTimingResult"]
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,12 @@ def _payload_text(payload: dict[str, Any]) -> str:
     return ""
 
 
+class RetrieverTimingResult(BaseModel):
+    references: list[RetrievedReference] = Field(default_factory=list)
+    embeddingMs: int = 0
+    qdrantSearchMs: int = 0
+
+
 class RetrieverService:
     """질의 임베딩 후 Qdrant 검색 → RetrievedReference 리스트."""
 
@@ -42,6 +51,11 @@ class RetrieverService:
         self._qdrant = QdrantService()
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedReference]:
+        return self.retrieve_with_timing(query, top_k).references
+
+    def retrieve_with_timing(
+        self, query: str, top_k: int | None = None
+    ) -> RetrieverTimingResult:
         normalized = " ".join((query or "").split())
         if not normalized:
             raise ValueError("query must not be empty")
@@ -50,28 +64,43 @@ class RetrieverService:
         q_len = len(normalized)
         logger.info("retriever retrieve start query_len=%s top_k=%s", q_len, k)
 
+        embedding_ms = 0
+        qdrant_search_ms = 0
+
         try:
+            t0 = time.perf_counter()
             vector = self._embed.embed_query(normalized)
+            embedding_ms = max(0, int((time.perf_counter() - t0) * 1000))
         except Exception as exc:
             logger.warning(
                 "retriever embed failed errorType=%s",
                 type(exc).__name__,
             )
-            return []
+            return RetrieverTimingResult(
+                references=[],
+                embeddingMs=embedding_ms,
+                qdrantSearchMs=qdrant_search_ms,
+            )
 
         try:
+            t0 = time.perf_counter()
             hits = self._qdrant.search(
                 query_vector=vector,
                 top_k=k,
                 collection_name=None,
                 query_filter=None,
             )
+            qdrant_search_ms = max(0, int((time.perf_counter() - t0) * 1000))
         except Exception as exc:
             logger.warning(
                 "retriever qdrant search failed errorType=%s",
                 type(exc).__name__,
             )
-            return []
+            return RetrieverTimingResult(
+                references=[],
+                embeddingMs=embedding_ms,
+                qdrantSearchMs=qdrant_search_ms,
+            )
 
         refs: list[RetrievedReference] = []
         for hit in hits:
@@ -99,4 +128,8 @@ class RetrieverService:
             )
 
         logger.info("retriever retrieve complete count=%s", len(refs))
-        return refs
+        return RetrieverTimingResult(
+            references=refs,
+            embeddingMs=embedding_ms,
+            qdrantSearchMs=qdrant_search_ms,
+        )

@@ -1,13 +1,16 @@
-"""AI 응답 캐싱 + 요청 제한 service (mock 단계).
+"""Cache service with graceful Redis fallback.
 
-이 단계에서는 실제 Redis 를 사용하지 않고 in-memory dict 로 구현한다.
-- 서버 재시작 시 캐시는 모두 사라진다.
-- 멀티 워커 환경에서는 워커별로 캐시가 분리된다 (실 Redis 도입 시 해소).
-- check_rate_limit 은 mock 단계에서 항상 True 를 반환한다.
+원칙:
+- REDIS_URL 미설정/연결 실패/직렬화 실패 시에도 호출자는 예외를 받지 않는다.
+- in-memory fallback은 테스트와 로컬 개발을 위한 보조 경로다.
+- 기존 get_cache/set_cache/build_cache_key API는 하위 호환을 위해 유지한다.
 """
+
+from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from typing import Any
 
@@ -15,18 +18,71 @@ from app.core.config import settings
 
 __all__ = ["CacheService"]
 
+logger = logging.getLogger(__name__)
+
 
 class CacheService:
-    """in-memory 캐시 + rate-limit (mock) service."""
+    """Redis 우선 + in-memory fallback 캐시 서비스."""
+
+    _GLOBAL_STORE: dict[str, tuple[Any, float | None]] = {}
 
     def __init__(self) -> None:
-        # value, expires_at(epoch seconds | None)
-        self._store: dict[str, tuple[Any, float | None]] = {}
+        self._store = CacheService._GLOBAL_STORE
+        self._redis = None
+        self._redis_ready = False
+        self._init_redis_client()
 
     # ------------------------------------------------------------------
-    # cache
+    # redis
     # ------------------------------------------------------------------
-    def get_cache(self, key: str) -> Any | None:
+    def _init_redis_client(self) -> None:
+        if not settings.REDIS_URL:
+            return
+        try:
+            import redis
+
+            self._redis = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            self._redis.ping()
+            self._redis_ready = True
+            logger.info("cache redis connected")
+        except Exception as exc:  # pragma: no cover - depends on runtime infra
+            self._redis = None
+            self._redis_ready = False
+            logger.warning("cache redis unavailable errorType=%s", type(exc).__name__)
+
+    def is_available(self) -> bool:
+        return bool(self._redis_ready and self._redis is not None)
+
+    # ------------------------------------------------------------------
+    # generic key helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_payload(payload: dict | list | Any) -> str:
+        return json.dumps(
+            payload or {},
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
+
+    @staticmethod
+    def _short_hash(value: str, length: int = 16) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+
+    def build_cache_key(self, prefix: str, payload: dict) -> str:
+        normalized = self._normalize_payload(payload)
+        digest = self._short_hash(normalized, 16)
+        return f"{prefix}:{digest}"
+
+    def build_hashed_key(self, prefix: str, payload: dict | list | Any) -> str:
+        normalized = self._normalize_payload(payload)
+        digest = self._short_hash(normalized, 32)
+        return f"{prefix}:{digest}"
+
+    # ------------------------------------------------------------------
+    # in-memory fallback
+    # ------------------------------------------------------------------
+    def _mem_get(self, key: str) -> Any | None:
         item = self._store.get(key)
         if item is None:
             return None
@@ -36,38 +92,72 @@ class CacheService:
             return None
         return value
 
-    def set_cache(self, key: str, value: Any, ttl: int | None = None) -> None:
-        effective_ttl = ttl if ttl is not None else settings.CACHE_TTL_SECONDS
-        if effective_ttl is None or effective_ttl <= 0:
+    def _mem_set(self, key: str, value: Any, ttl_seconds: int | None) -> None:
+        if ttl_seconds is None or ttl_seconds <= 0:
             expires_at: float | None = None
         else:
-            expires_at = time.time() + float(effective_ttl)
+            expires_at = time.time() + float(ttl_seconds)
         self._store[key] = (value, expires_at)
+
+    # ------------------------------------------------------------------
+    # json interface (new)
+    # ------------------------------------------------------------------
+    def get_json(self, key: str) -> dict | list | None:
+        if self.is_available():
+            try:
+                raw = self._redis.get(key)
+                if not raw:
+                    return None
+                loaded = json.loads(raw)
+                if isinstance(loaded, (dict, list)):
+                    return loaded
+                return None
+            except Exception as exc:  # pragma: no cover - infra-dependent
+                logger.warning("cache redis get_json failed errorType=%s", type(exc).__name__)
+                return None
+
+        mem = self._mem_get(key)
+        if isinstance(mem, (dict, list)):
+            return mem
+        return None
+
+    def set_json(self, key: str, value: Any, ttl_seconds: int) -> bool:
+        if not isinstance(value, (dict, list)):
+            return False
+
+        if self.is_available():
+            try:
+                raw = json.dumps(value, ensure_ascii=False, default=str)
+                if ttl_seconds > 0:
+                    self._redis.setex(key, ttl_seconds, raw)
+                else:
+                    self._redis.set(key, raw)
+                return True
+            except Exception as exc:  # pragma: no cover - infra-dependent
+                logger.warning("cache redis set_json failed errorType=%s", type(exc).__name__)
+                return False
+
+        self._mem_set(key, value, ttl_seconds)
+        return True
+
+    # ------------------------------------------------------------------
+    # legacy cache interface (compatible)
+    # ------------------------------------------------------------------
+    def get_cache(self, key: str) -> Any | None:
+        return self._mem_get(key)
+
+    def set_cache(self, key: str, value: Any, ttl: int | None = None) -> None:
+        effective_ttl = ttl if ttl is not None else settings.CACHE_TTL_SECONDS
+        self._mem_set(key, value, effective_ttl)
 
     def delete_cache(self, key: str) -> None:
         self._store.pop(key, None)
-
-    def build_cache_key(self, prefix: str, payload: dict) -> str:
-        """prefix + payload 의 결정적 해시로 캐시 키를 만든다.
-
-        동일 payload → 동일 키 (sort_keys 로 dict 순서 영향 제거).
-        """
-        normalized = json.dumps(
-            payload or {},
-            sort_keys=True,
-            ensure_ascii=False,
-            default=str,
-        )
-        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-        return f"{prefix}:{digest}"
 
     # ------------------------------------------------------------------
     # rate limit (mock)
     # ------------------------------------------------------------------
     def check_rate_limit(self, user_id: str | None, client_ip: str) -> bool:
-        # mock 단계: 항상 허용. 실제 슬라이딩 윈도우 카운팅은 Redis 도입 후 구현.
         return True
 
     def get_remaining_requests(self, key: str) -> int:
-        # mock 단계: 실제 사용량 추적 미구현 → 분당 한도를 그대로 반환.
         return settings.RATE_LIMIT_PER_MINUTE

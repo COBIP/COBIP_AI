@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     FEATURE_TEMPLATE_RAG_TOP_K: int = 3
     FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS: int = 1000
 
+    # Agentic RAG 16차: warm-up 및 Redis 캐시 제어
+    EMBEDDING_WARMUP_ENABLED: bool = False
+    EMBEDDING_WARMUP_TEXT: str = "Spring Boot 로그인 기능템플릿 RAG warm up"
+    RAG_RETRIEVAL_CACHE_ENABLED: bool = False
+    RAG_RETRIEVAL_CACHE_TTL_SECONDS: int = 3600
+    FEATURE_TEMPLATE_CACHE_ENABLED: bool = False
+    FEATURE_TEMPLATE_CACHE_TTL_SECONDS: int = 3600
+
     # Agent /ai/chat: 룰 기본, 선택적 LLM intent 보조
     AGENT_LLM_INTENT_ENABLED: bool = False
     AGENT_LLM_INTENT_REFINE_GENERAL: bool = False

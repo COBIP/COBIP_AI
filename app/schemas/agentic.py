@@ -161,6 +161,38 @@ class AgenticRagTrace(BaseModel):
         ge=0,
         description="run_agentic_rag feature_template 경로 전체 소요(ms). latencyMs와 동일",
     )
+    # Agentic RAG 16차 — retrieval 세부 timing / cache 관측
+    embeddingMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="RAG retrieval 중 임베딩 생성 소요(ms)",
+    )
+    qdrantSearchMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="RAG retrieval 중 Qdrant search 소요(ms)",
+    )
+    referenceBuildMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="Qdrant hit을 ragReferences로 정리한 소요(ms)",
+    )
+    ragCacheHit: bool = Field(
+        default=False,
+        description="RAG retrieval cache hit 여부",
+    )
+    ragCacheKey: str | None = Field(
+        default=None,
+        description="RAG retrieval cache key (hash 기반)",
+    )
+    featureTemplateCacheHit: bool = Field(
+        default=False,
+        description="feature_template skeleton cache hit 여부",
+    )
+    featureTemplateCacheKey: str | None = Field(
+        default=None,
+        description="feature_template skeleton cache key (hash 기반)",
+    )
 
 
 class AgenticRagResponseData(BaseModel):
