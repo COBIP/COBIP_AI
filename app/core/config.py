@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     # Agentic RAG 18차: ultra-fast skeleton (LLM 생성 범위 최소화, normalizer 보정)
     FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED: bool = True
     FEATURE_TEMPLATE_SKELETON_RAG_TOP_K: int = 2
-    FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS: int = 400
-    FEATURE_TEMPLATE_SKELETON_MAX_TOKENS: int = 900
+    FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS: int = 300
+    FEATURE_TEMPLATE_SKELETON_MAX_TOKENS: int = 800
 
     # Agent /ai/chat: 룰 기본, 선택적 LLM intent 보조
     AGENT_LLM_INTENT_ENABLED: bool = False

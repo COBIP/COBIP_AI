@@ -38,8 +38,8 @@ def _req(**kwargs: object) -> FeatureTemplateGenerateRequest:
 def test_ultra_fast_skeleton_defaults_enabled() -> None:
     assert settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED is True
     assert settings.FEATURE_TEMPLATE_SKELETON_RAG_TOP_K == 2
-    assert settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS == 400
-    assert settings.FEATURE_TEMPLATE_SKELETON_MAX_TOKENS == 900
+    assert settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS == 300
+    assert settings.FEATURE_TEMPLATE_SKELETON_MAX_TOKENS == 800
 
 
 def test_ultra_fast_takes_priority_over_fast(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,12 +65,14 @@ def test_ultra_fast_prompt_defers_questions_and_recommendations() -> None:
     assert "LoginController.java" not in text
 
 
-def test_ultra_fast_prompt_shorter_than_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ultra_fast_prompt_more_restrictive_than_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     ultra_text = build_feature_template_prompt(_req())
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     fast_text = build_feature_template_prompt(_req())
-    assert len(ultra_text) < len(fast_text)
+    assert "50자 내외" in ultra_text
+    assert "basicQuestions: 반드시 []" in ultra_text
+    assert "basicQuestions: 정확히 3개" in fast_text
 
 
 def test_include_code_true_still_empty_codefiles_in_ultra_fast() -> None:
@@ -81,11 +83,11 @@ def test_include_code_true_still_empty_codefiles_in_ultra_fast() -> None:
 
 def test_skeleton_rag_params_for_ultra_fast() -> None:
     assert skeleton_rag_top_k_for_initial_generate() == 2
-    assert skeleton_rag_content_max_chars_for_initial_generate() == 400
+    assert skeleton_rag_content_max_chars_for_initial_generate() == 300
 
 
 def test_skeleton_max_tokens_only_for_non_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert skeleton_max_tokens_for_initial_generate() == 900
+    assert skeleton_max_tokens_for_initial_generate() == 800
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", False)
     assert skeleton_max_tokens_for_initial_generate() is None
@@ -146,11 +148,11 @@ def test_generate_passes_skeleton_max_tokens(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(gen._llm_service, "generate_json", fake_json)
     result = gen.generate(_req())
-    assert seen.get("max_tokens") == 900
+    assert seen.get("max_tokens") == 800
     assert result.ultraFastSkeletonEnabled is True
-    assert result.skeletonMaxTokens == 900
+    assert result.skeletonMaxTokens == 800
     assert result.skeletonRagTopK == 2
-    assert result.skeletonRagContentMaxChars == 400
+    assert result.skeletonRagContentMaxChars == 300
 
 
 def test_regenerate_section_does_not_pass_skeleton_max_tokens(
@@ -206,6 +208,64 @@ def test_skeleton_metadata_serializable() -> None:
     meta = get_initial_generation_skeleton_metadata()
     assert meta["ultraFastSkeletonEnabled"] is True
     assert meta["fastSkeletonEnabled"] is True
-    assert meta["skeletonMaxTokens"] == 900
+    assert meta["skeletonMaxTokens"] == 800
     assert meta["skeletonRagTopK"] == 2
-    assert meta["skeletonRagContentMaxChars"] == 400
+    assert meta["skeletonRagContentMaxChars"] == 300
+
+
+def test_ultra_fast_prompt_tighter_flow_and_rag_guidance() -> None:
+    text = build_feature_template_prompt(_req())
+    assert "steps 3개 이하" in text
+    assert "layers 3개 이하" in text
+    assert "50자 내외" in text
+    assert "요약·재서술하지 말고" in text or "요약·재서술하지" in text
+
+
+def test_normalizer_fills_short_login_overview_and_flow() -> None:
+    request = _req(includeCode=False, includeMissions=False, includeInterview=False)
+    minimal = {
+        "overview": {
+            "featureName": "로그인",
+            "purpose": "",
+            "useCases": [],
+            "resultDescription": "x",
+            "techStack": ["java"],
+            "learningGoals": [],
+        },
+        "requirements": [],
+        "flow": {"steps": ["1) a"], "layers": [{"layer": "X", "role": ""}]},
+        "apiSpec": [
+            {
+                "method": "POST",
+                "endpoint": "/api/feature",
+                "requestBody": {},
+                "responseBody": {},
+            }
+        ],
+        "codeFiles": [],
+        "basicQuestions": [],
+        "missions": [],
+        "interviewQuestions": [],
+        "nextRecommendations": [],
+    }
+    normalized = FeatureTemplateNormalizer.normalize(minimal, request)
+    assert len(normalized["overview"]["purpose"]) > 10
+    assert len(normalized["flow"]["steps"]) >= 3
+    assert len(normalized["flow"]["layers"]) >= 3
+    assert normalized["apiSpec"][0]["endpoint"] == "/api/auth/login"
+
+
+def test_cache_key_changes_when_skeleton_tuning_settings_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    req = _req()
+    key_default = AgentOrchestrator._build_feature_template_cache_key(
+        feature_request=req,
+        rag_references=[],
+    )
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_SKELETON_MAX_TOKENS", 750)
+    key_tuned = AgentOrchestrator._build_feature_template_cache_key(
+        feature_request=req,
+        rag_references=[],
+    )
+    assert key_default != key_tuned

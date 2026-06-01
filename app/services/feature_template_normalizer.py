@@ -532,6 +532,14 @@ def _login_api_spec_template() -> dict[str, Any]:
     }
 
 
+def _default_login_purpose() -> str:
+    return "사용자가 email과 password로 시스템에 안전하게 인증한다."
+
+
+def _default_login_result_description() -> str:
+    return "인증 성공 시 accessToken과 사용자 요약 정보를 반환한다."
+
+
 def _default_login_learning_goals() -> list[str]:
     return [
         "Controller → Service → Repository 계층 흐름을 이해한다.",
@@ -687,6 +695,15 @@ def _default_login_flow_layers() -> list[dict[str, str]]:
     ]
 
 
+def _default_login_flow_layers_compact() -> list[dict[str, str]]:
+    return [
+        {"layer": "Client", "role": "로그인 요청 전송"},
+        {"layer": "Controller", "role": "요청 수신·입력 검증"},
+        {"layer": "Service", "role": "인증·JWT 발급"},
+        {"layer": "DB", "role": "사용자 조회"},
+    ]
+
+
 def _default_login_flow_steps() -> list[str]:
     return [
         "1. 사용자가 email과 password를 입력한다.",
@@ -694,6 +711,14 @@ def _default_login_flow_steps() -> list[str]:
         "3. Controller가 요청 DTO를 검증한다.",
         "4. Service가 사용자 조회 및 비밀번호 해시 검증을 수행한다.",
         "5. 인증 성공 시 JWT accessToken을 발급하고 응답을 반환한다.",
+    ]
+
+
+def _default_login_flow_steps_compact() -> list[str]:
+    return [
+        "1. POST /api/auth/login 요청 수신",
+        "2. 입력 검증 및 사용자 인증",
+        "3. JWT accessToken 응답 반환",
     ]
 
 
@@ -780,6 +805,16 @@ def _ensure_login_quality_baseline(
 
     overview = normalized.get("overview")
     if isinstance(overview, dict):
+        if _is_missing_or_blank_str(overview.get("purpose")) or _is_poor_short_text(
+            overview.get("purpose")
+        ):
+            overview["purpose"] = _default_login_purpose()
+            changed_fields.append("overview.purpose[login-default]")
+        if _is_missing_or_blank_str(overview.get("resultDescription")) or _is_poor_short_text(
+            overview.get("resultDescription")
+        ):
+            overview["resultDescription"] = _default_login_result_description()
+            changed_fields.append("overview.resultDescription[login-default]")
         goals = overview.get("learningGoals")
         if _str_list_effectively_empty(goals) or (
             isinstance(goals, list) and len(goals) < 3
@@ -835,6 +870,9 @@ def _ensure_login_quality_baseline(
     while len(fixed_reqs) < 3:
         fixed_reqs.append(dict(defaults[len(fixed_reqs)]))
         changed_fields.append("requirements[login+pad]")
+    if len(fixed_reqs) > 3:
+        fixed_reqs = fixed_reqs[:3]
+        changed_fields.append("requirements[login-trim]")
     for index, item in enumerate(fixed_reqs):
         default = defaults[min(index, len(defaults) - 1)]
         rel = _coerce_to_string(item.get("relatedScreenOrApi")).strip()
@@ -876,14 +914,14 @@ def _ensure_login_quality_baseline(
     flow = normalized.get("flow")
     if isinstance(flow, dict):
         layers = flow.get("layers")
-        if not isinstance(layers, list) or len(layers) <= 1:
-            flow["layers"] = list(_default_login_flow_layers())
+        if not isinstance(layers, list) or len(layers) < 3:
+            flow["layers"] = list(_default_login_flow_layers_compact())
             changed_fields.append("flow.layers[login-default]")
         steps = flow.get("steps")
         if _str_list_effectively_empty(steps) or (
-            isinstance(steps, list) and len(steps) < 4
+            isinstance(steps, list) and len(steps) < 3
         ):
-            flow["steps"] = list(_default_login_flow_steps())
+            flow["steps"] = list(_default_login_flow_steps_compact())
             changed_fields.append("flow.steps[login-default]")
         normalized["flow"] = flow
 

@@ -41,9 +41,9 @@ def test_normalize_empty_dict_has_all_sections(sample_request: FeatureTemplateGe
     assert set(out.keys()) == _CANONICAL_KEYS
     assert isinstance(out["requirements"], list)
     assert isinstance(out["flow"], dict)
-    # 로그인 도메인은 11차 품질 정책에 따라 flow.steps/layers가 빈약하면 기본값으로 보정된다.
-    assert len(out["flow"]["steps"]) >= 4
-    assert len(out["flow"]["layers"]) >= 4
+    # 로그인 도메인은 11차/19차 품질 정책에 따라 flow.steps/layers가 빈약하면 기본값으로 보정된다.
+    assert len(out["flow"]["steps"]) >= 3
+    assert len(out["flow"]["layers"]) >= 3
     assert out["overview"]["featureName"] == "로그인"
 
 
@@ -878,10 +878,10 @@ def test_login_flow_layers_expanded_when_only_controller(
     }
     out = FeatureTemplateNormalizer.normalize(raw, sample_request)
     layer_names = {layer["layer"] for layer in out["flow"]["layers"]}
-    for required in ("Controller", "Service", "Repository"):
+    for required in ("Controller", "Service", "DB"):
         assert required in layer_names
-    assert {"Client", "Response"} & layer_names
-    assert len(out["flow"]["steps"]) >= 4
+    assert "Client" in layer_names
+    assert len(out["flow"]["steps"]) >= 3
     FeatureTemplateData(**out)
 
 

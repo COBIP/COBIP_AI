@@ -313,14 +313,14 @@ def _build_ultra_fast_skeleton_section_instructions(
 ) -> str:
     lines = [
         "- ultra-fast skeleton: LLM은 overview·requirements·flow·apiSpec만 최소 생성한다.",
-        "- overview: purpose·resultDescription 각 1문장, learningGoals 0~3개 짧게, useCases·techStack 최소.",
-        "- requirements: 정확히 3개, 각 필드 한 문장 이하.",
-        "- flow: steps 정확히 3개, layers 3~4개, 각 role은 짧게.",
-        "- apiSpec: 핵심 API 1개, requestBody/responseBody는 짧은 JSON.",
+        "- overview: purpose·resultDescription 각 1문장·50자 내외. learningGoals는 [] 허용 또는 최대 2개 짧게. useCases·techStack 최소.",
+        "- requirements: 정확히 3개. description/processCondition/successResult/failureResult는 각 짧게.",
+        "- flow: steps 3개 이하, layers 3개 이하. 각 role은 짧게.",
+        "- apiSpec: 핵심 API 1개. requestBody/responseBody는 최소 필드 JSON.",
         "- basicQuestions: 반드시 [] (서버 normalizer가 3개 채움).",
         "- nextRecommendations: 반드시 [] (서버 normalizer가 3개 채움).",
         "- codeFiles/missions/interviewQuestions: include 플래그와 무관하게 반드시 [].",
-        "- RAG context는 참고만 하고 길게 재서술하지 않는다.",
+        "- RAG context는 요약·재서술하지 말고 requirements/apiSpec/flow에만 반영한다.",
         "- 장문 설명·중복 문장·코드 본문 금지.",
         "- 모든 필드는 schema 이름을 그대로 사용한다. goal/hints/keywords/title 단독 key 금지.",
         '- enum: difficulty는 "beginner"|"intermediate"|"advanced".',
@@ -441,20 +441,21 @@ def _build_initial_generation_json_skeleton(
                 }
             ],
             "flow": {
-                "steps": ["1) 요청", "2) 처리", "3) 응답"],
+                "steps": ["1) 요청", "2) 인증", "3) 응답"],
                 "layers": [
-                    {"layer": "Controller", "role": ""},
-                    {"layer": "Service", "role": ""},
+                    {"layer": "Controller", "role": "수신"},
+                    {"layer": "Service", "role": "인증"},
+                    {"layer": "DB", "role": "조회"},
                 ],
             },
             "apiSpec": [
                 {
-                    "apiName": "",
+                    "apiName": "로그인",
                     "method": "POST",
                     "endpoint": "/api/auth/login",
                     "description": "",
-                    "requestBody": {},
-                    "responseBody": {},
+                    "requestBody": {"email": "", "password": ""},
+                    "responseBody": {"accessToken": ""},
                     "status": 200,
                 }
             ],
