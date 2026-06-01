@@ -11,6 +11,8 @@ services:
   ai-server:
     environment:
       RAG_ENABLED: "true"
+      EMBEDDING_WARMUP_ENABLED: "true"
+      EMBEDDING_WARMUP_TEXT: "Spring Boot 로그인 기능템플릿 RAG warm up"
       REDIS_URL: redis://redis:6379/0
       RAG_RETRIEVAL_CACHE_ENABLED: "true"
       RAG_RETRIEVAL_CACHE_TTL_SECONDS: "3600"

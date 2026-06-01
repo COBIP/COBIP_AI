@@ -92,12 +92,27 @@ class EmbeddingService:
     def warm_up(self, text: str | None = None) -> bool:
         """임베딩 모델 warm-up. 실패해도 예외 대신 False를 반환한다."""
 
+        ok, _error = self.warm_up_with_detail(text)
+        return ok
+
+    def warm_up_with_detail(self, text: str | None = None) -> tuple[bool, str | None]:
+        """warm-up 수행. RAG retrieval과 동일한 shared model·embed_query 경로를 사용한다."""
+
         try:
             target = self.normalize_text(text or settings.EMBEDDING_WARMUP_TEXT)
             if not target:
                 target = "warmup"
+            # embed_query → _get_model() 로 process-level shared SentenceTransformer 로드
             _ = self.embed_query(target)
-            return True
+            if EmbeddingService._shared_model is None:
+                logger.warning("embedding warmup finished but shared model is unset")
+                return False, "shared_model_unset"
+            return True, None
         except Exception as exc:  # pragma: no cover - runtime 환경 의존
-            logger.warning("embedding warmup failed errorType=%s", type(exc).__name__)
-            return False
+            error_type = type(exc).__name__
+            logger.warning("embedding warmup failed errorType=%s", error_type)
+            return False, error_type
+
+    @classmethod
+    def is_shared_model_loaded(cls) -> bool:
+        return cls._shared_model is not None

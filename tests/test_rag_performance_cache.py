@@ -319,13 +319,16 @@ def test_embedding_warmup_enabled_attempts_call(
 ) -> None:
     calls = {"n": 0}
 
-    def fake_warmup(self, text: str | None = None) -> bool:
+    def fake_detail(self, text: str | None = None) -> tuple[bool, str | None]:
         calls["n"] += 1
-        return True
+        return True, None
 
     monkeypatch.setattr(settings, "EMBEDDING_WARMUP_ENABLED", True)
     monkeypatch.setattr(settings, "RAG_ENABLED", True)
-    monkeypatch.setattr("app.services.embedding_service.EmbeddingService.warm_up", fake_warmup)
+    monkeypatch.setattr(
+        "app.services.embedding_service.EmbeddingService.warm_up_with_detail",
+        fake_detail,
+    )
 
     with TestClient(app):
         pass
@@ -335,13 +338,16 @@ def test_embedding_warmup_enabled_attempts_call(
 def test_embedding_warmup_disabled_skips_call(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"n": 0}
 
-    def fake_warmup(self, text: str | None = None) -> bool:
+    def fake_detail(self, text: str | None = None) -> tuple[bool, str | None]:
         calls["n"] += 1
-        return True
+        return True, None
 
     monkeypatch.setattr(settings, "EMBEDDING_WARMUP_ENABLED", False)
     monkeypatch.setattr(settings, "RAG_ENABLED", True)
-    monkeypatch.setattr("app.services.embedding_service.EmbeddingService.warm_up", fake_warmup)
+    monkeypatch.setattr(
+        "app.services.embedding_service.EmbeddingService.warm_up_with_detail",
+        fake_detail,
+    )
 
     with TestClient(app):
         pass
