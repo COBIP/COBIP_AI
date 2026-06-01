@@ -49,6 +49,7 @@ def test_generate_fallback_has_all_sections(minimal_request: FeatureTemplateGene
     assert result.generationMode == "fallback"
     assert result.skeletonFirst is True
     assert result.deferredSections == ["codeFiles", "missions", "interviewQuestions"]
+    assert isinstance(result.fastSkeletonEnabled, bool)
 
 
 def test_generate_success_path_uses_normalizer(
@@ -86,6 +87,7 @@ def test_generate_success_path_uses_normalizer(
     assert result.generationMode == "skeleton"
     assert result.skeletonFirst is True
     assert result.deferredSections == ["codeFiles", "missions", "interviewQuestions"]
+    assert result.fastSkeletonEnabled is True
     assert seen["timeout_seconds"] == settings.FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS
 
 

@@ -356,6 +356,12 @@ class AgentOrchestrator:
                             cached_ft.get("deferredSections")
                             or ["codeFiles", "missions", "interviewQuestions"]
                         ),
+                        fastSkeletonEnabled=bool(
+                            cached_ft.get(
+                                "fastSkeletonEnabled",
+                                settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED,
+                            )
+                        ),
                     )
                     feature_template_cache_hit = True
                     steps.append("feature_template_cache_hit")
@@ -375,6 +381,7 @@ class AgentOrchestrator:
                         "generationMode": result.generationMode,
                         "skeletonFirst": result.skeletonFirst,
                         "deferredSections": result.deferredSections,
+                        "fastSkeletonEnabled": result.fastSkeletonEnabled,
                     },
                     settings.FEATURE_TEMPLATE_CACHE_TTL_SECONDS,
                 )
@@ -420,6 +427,7 @@ class AgentOrchestrator:
             generationMode=result.generationMode,
             skeletonFirst=result.skeletonFirst,
             deferredSections=result.deferredSections,
+            fastSkeletonEnabled=result.fastSkeletonEnabled,
             ragRetrievalAttempted=retrieval.attempted,
             ragRetrievalStatus=retrieval.status,
             ragRetrievedCount=retrieval.retrieved_count,
@@ -450,6 +458,7 @@ class AgentOrchestrator:
                 "generationMode": result.generationMode,
                 "skeletonFirst": result.skeletonFirst,
                 "deferredSections": result.deferredSections,
+                "fastSkeletonEnabled": result.fastSkeletonEnabled,
             },
             trace=trace,
         )
@@ -470,9 +479,10 @@ class AgentOrchestrator:
             "includeMissions": feature_request.includeMissions,
             "includeInterview": feature_request.includeInterview,
             "ragReferences": rag_references,
-            "version": "v1",
+            "fastSkeletonEnabled": settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED,
+            "version": "v2",
         }
-        return cache_service.build_hashed_key("feature-template:skeleton:v1", payload)
+        return cache_service.build_hashed_key("feature-template:skeleton:v2", payload)
 
     @staticmethod
     def _classify_agentic_intent_with_reason(

@@ -26,6 +26,7 @@ __all__ = [
     "build_feature_template_section_prompt",
     "extract_raw_rag_references_from_reference_context",
     "format_rag_references_for_feature_template_prompt",
+    "is_fast_skeleton_enabled_for_initial_generate",
     "select_usable_rag_references",
 ]
 
@@ -230,11 +231,49 @@ def _reference_context_for_prompt_json(
     return out
 
 
+def is_fast_skeleton_enabled_for_initial_generate() -> bool:
+    """17차: 최초 generate fast skeleton 프로필 활성 여부."""
+
+    return bool(settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED)
+
+
 def _build_initial_generation_section_instructions(
     request: FeatureTemplateGenerateRequest,
+    *,
+    fast_skeleton: bool,
 ) -> str:
     """include flags에 따라 최초 generate용 섹션 지시만 짧게 조립한다."""
 
+    if fast_skeleton:
+        return _build_fast_skeleton_section_instructions(request)
+    return _build_legacy_initial_generation_section_instructions(request)
+
+
+def _build_fast_skeleton_section_instructions(
+    request: FeatureTemplateGenerateRequest,
+) -> str:
+    lines = [
+        "- fast skeleton 초안 모드: 최초 generate는 짧은 초안만 생성한다. 장문 해설·상세 근거·긴 배열은 금지한다.",
+        "- overview: purpose·resultDescription은 각 1~2문장, learningGoals는 최대 3개(각 20자 내외), useCases·techStack은 짧게.",
+        "- requirements: 정확히 3개. 각 필드는 한 문장 수준으로 짧게 쓴다.",
+        "- flow: steps 3~4개, layers 4~5개 이하로 핵심 계층만 짧게.",
+        "- apiSpec: 핵심 API 1개만. requestBody/responseBody는 짧은 JSON 객체 예시.",
+        "- basicQuestions: 정확히 3개. explanation은 1문장.",
+        "- nextRecommendations: 정확히 3개만.",
+        "- codeFiles: includeCode와 무관하게 반드시 []만 반환한다. 코드 본문·stub·파일명 나열은 금지.",
+        "- missions: includeMissions와 무관하게 반드시 []만 반환한다.",
+        "- interviewQuestions: includeInterview와 무관하게 반드시 []만 반환한다.",
+        "- 상세 보강은 regenerate-section과 서버 normalizer가 담당한다.",
+        "- 모든 필드는 schema 이름을 그대로 사용한다. goal/hints/keywords/title 같은 단독 key는 금지한다.",
+        '- enum: difficulty는 "beginner"|"intermediate"|"advanced", basicQuestions.type은 허용값만 사용한다.',
+        '- 타입: requirements[].priority는 문자열, apiSpec[].status는 정수, flow.steps는 문자열 배열이다.',
+    ]
+    return "\n".join(lines)
+
+
+def _build_legacy_initial_generation_section_instructions(
+    request: FeatureTemplateGenerateRequest,
+) -> str:
     lines = [
         "- 최초 generate는 skeleton-first 전략이다. 전체 구조만 빠르게 보여주고 상세 보강은 regenerate-section에서 수행한다.",
         "- overview: featureName, purpose, useCases, resultDescription, techStack, learningGoals를 짧게 채운다.",
@@ -292,10 +331,80 @@ def _build_initial_generation_section_instructions(
 
 def _build_initial_generation_json_skeleton(
     request: FeatureTemplateGenerateRequest,
+    *,
+    fast_skeleton: bool,
 ) -> str:
-    """9개 top-level key를 유지하되 include flags에 따라 선택 섹션 예시는 제거한다."""
+    """9개 top-level key를 유지하되 fast skeleton은 예시를 최소화한다."""
 
-    skeleton: dict[str, Any] = {
+    if fast_skeleton:
+        skeleton: dict[str, Any] = {
+            "overview": {
+                "featureName": request.featureName,
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [request.language]
+                + ([request.framework] if request.framework else []),
+                "learningGoals": [],
+            },
+            "requirements": [
+                {
+                    "requirementId": "R-001",
+                    "name": "",
+                    "description": "",
+                    "inputValue": "",
+                    "processCondition": "",
+                    "successResult": "",
+                    "failureResult": "",
+                    "priority": "HIGH",
+                    "relatedScreenOrApi": "",
+                }
+            ],
+            "flow": {
+                "steps": ["1) 요청", "2) 검증", "3) 처리", "4) 응답"],
+                "layers": [
+                    {"layer": "Controller", "role": ""},
+                    {"layer": "Service", "role": ""},
+                ],
+            },
+            "apiSpec": [
+                {
+                    "apiName": "",
+                    "method": "POST",
+                    "endpoint": "/api/feature",
+                    "description": "",
+                    "requestBody": {},
+                    "responseBody": {},
+                    "status": 200,
+                }
+            ],
+            "codeFiles": [],
+            "basicQuestions": [
+                {
+                    "questionId": "Q-001",
+                    "type": "short_answer",
+                    "question": "",
+                    "choices": None,
+                    "answer": "",
+                    "explanation": "",
+                    "relatedSection": "requirements",
+                    "difficulty": request.level.value,
+                }
+            ],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [
+                {
+                    "featureName": "",
+                    "reason": "",
+                    "expectedLearning": "",
+                    "priority": 1,
+                }
+            ],
+        }
+        return json.dumps(skeleton, ensure_ascii=False, indent=2)
+
+    skeleton = {
         "overview": {
             "featureName": request.featureName,
             "purpose": "",
@@ -395,6 +504,8 @@ def build_feature_template_prompt_with_applied_rags(
     else:
         reference_context_text = "(없음)"
 
+    fast_skeleton = is_fast_skeleton_enabled_for_initial_generate()
+
     user_prompt = FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE.format(
         language=request.language,
         framework=framework_text,
@@ -405,8 +516,14 @@ def build_feature_template_prompt_with_applied_rags(
         includeInterview=str(request.includeInterview).lower(),
         ragContextSection=rag_context_section,
         referenceContext=reference_context_text,
-        sectionInstructions=_build_initial_generation_section_instructions(request),
-        jsonSkeleton=_build_initial_generation_json_skeleton(request),
+        sectionInstructions=_build_initial_generation_section_instructions(
+            request,
+            fast_skeleton=fast_skeleton,
+        ),
+        jsonSkeleton=_build_initial_generation_json_skeleton(
+            request,
+            fast_skeleton=fast_skeleton,
+        ),
     )
 
     prompt = f"{FEATURE_TEMPLATE_SYSTEM_PROMPT}\n\n{user_prompt}"

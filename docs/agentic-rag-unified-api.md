@@ -264,7 +264,7 @@ chat 경로일 때 `data.result.agent.trace`에는 `/ai/chat`과 동일한 **하
 
 - Redis가 없거나 연결 실패해도 요청은 실패하지 않으며 기존 흐름으로 계속 동작합니다 (graceful fallback).
 - retrieval cache key: `rag:feature-template:v1:{sha256...}`
-- feature template cache key: `feature-template:skeleton:v1:{sha256...}`
+- feature template cache key: `feature-template:skeleton:v2:{sha256...}` (17차부터, `fastSkeletonEnabled` 포함)
 - fallback 결과(`source=fallback`)는 feature template cache에 저장하지 않습니다.
 
 16차 추가 trace 필드:
@@ -283,6 +283,26 @@ cache hit 예시:
 
 - `ragCacheHit=true` 이면 `embeddingMs=0`, `qdrantSearchMs=0`, `referenceBuildMs=0`
 - `featureTemplateCacheHit=true` 이면 `featureTemplateGenerationMs=0` (LLM generate 생략)
+
+### fast skeleton 초안 (17차)
+
+16차까지 Redis 캐시 hit 시에는 매우 빠르지만, **cache miss·첫 요청**에서는 `featureTemplateGenerationMs`가 LLM skeleton 생성 때문에 대부분의 시간을 차지합니다. 17차는 캐시에만 의존하지 않고 **최초 generate prompt·출력량을 줄여** uncached 응답을 1분 이내에 가깝게 만드는 것을 목표로 합니다.
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `FEATURE_TEMPLATE_FAST_SKELETON_ENABLED` | `true` | 최초 generate fast skeleton 프로필 (짧은 overview/requirements/flow, deferred 섹션은 `[]` 우선) |
+
+동작 원칙:
+
+- `generationMode=skeleton`, `skeletonFirst=true`, `deferredSections=["codeFiles","missions","interviewQuestions"]` 는 12차 정책 그대로 유지합니다.
+- `codeFiles` / `missions` / `interviewQuestions` 는 include 플래그와 무관하게 최초 generate에서 `[]` 우선입니다. 상세는 `regenerate-section` + normalizer 로그인 baseline 보정으로 보강합니다.
+- feature template cache key: `feature-template:skeleton:v2:{sha256...}` (`fastSkeletonEnabled` 설정값 포함)
+
+17차 추가 trace/result 필드:
+
+| 필드 | 설명 |
+| --- | --- |
+| `fastSkeletonEnabled` | fast skeleton 프로필 적용 여부 |
 
 ### `source` 위치
 

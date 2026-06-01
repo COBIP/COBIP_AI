@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     FEATURE_TEMPLATE_CACHE_ENABLED: bool = False
     FEATURE_TEMPLATE_CACHE_TTL_SECONDS: int = 3600
 
+    # Agentic RAG 17차: 최초 generate fast skeleton (짧은 초안, uncached 속도 개선)
+    FEATURE_TEMPLATE_FAST_SKELETON_ENABLED: bool = True
+
     # Agent /ai/chat: 룰 기본, 선택적 LLM intent 보조
     AGENT_LLM_INTENT_ENABLED: bool = False
     AGENT_LLM_INTENT_REFINE_GENERAL: bool = False

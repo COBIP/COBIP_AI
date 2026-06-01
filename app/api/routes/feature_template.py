@@ -25,6 +25,7 @@ def generate_feature_template(
             "generationMode": result.generationMode,
             "skeletonFirst": result.skeletonFirst,
             "deferredSections": result.deferredSections,
+            "fastSkeletonEnabled": result.fastSkeletonEnabled,
         },
     )
 
