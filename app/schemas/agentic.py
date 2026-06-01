@@ -133,6 +133,27 @@ class AgenticRagTrace(BaseModel):
         ge=0,
         description="18차: 최초 skeleton generate RAG content 최대 길이",
     )
+    instantSkeletonUsed: bool = Field(
+        default=False,
+        description="22차: quality instant skeleton 적용 여부",
+    )
+    qualityBaselineApplied: bool = Field(
+        default=False,
+        description="22차: deterministic quality baseline 적용 여부",
+    )
+    initialLlmEnhancementAttempted: bool = Field(
+        default=False,
+        description="22차: optional LLM enhancement 시도 여부",
+    )
+    initialLlmEnhancementSucceeded: bool = Field(
+        default=False,
+        description="22차: optional LLM enhancement 성공 여부",
+    )
+    initialLlmEnhancementMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="22차: optional LLM enhancement 소요(ms)",
+    )
     # Agentic RAG 13차 — Qdrant 자동 retrieval 관측 필드
     ragRetrievalAttempted: bool = Field(
         default=False,

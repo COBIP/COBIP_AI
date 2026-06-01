@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS: int = 300
     FEATURE_TEMPLATE_SKELETON_MAX_TOKENS: int = 800
 
+    # Agentic RAG 22차: quality instant skeleton (LLM 대기 없이 deterministic baseline)
+    FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED: bool = True
+    FEATURE_TEMPLATE_INITIAL_LLM_ENHANCEMENT_ENABLED: bool = False
+    FEATURE_TEMPLATE_INITIAL_LLM_TIMEOUT_SECONDS: int = 8
+    FEATURE_TEMPLATE_CACHE_INSTANT_SKELETON_ENABLED: bool = True
+
     # Agent /ai/chat: 룰 기본, 선택적 LLM intent 보조
     AGENT_LLM_INTENT_ENABLED: bool = False
     AGENT_LLM_INTENT_REFINE_GENERAL: bool = False

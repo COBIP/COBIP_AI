@@ -36,8 +36,12 @@ def minimal_request() -> FeatureTemplateGenerateRequest:
     )
 
 
-def test_generate_fallback_has_all_sections(minimal_request: FeatureTemplateGenerateRequest) -> None:
+def test_generate_fallback_has_all_sections(
+    minimal_request: FeatureTemplateGenerateRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """OLLAMA 미설정 등으로 LLM이 실패해도 mock 결과는 9개 섹션을 갖춘다."""
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", False)
     gen = FeatureTemplateGenerator(llm_service=MagicMock())
     gen._llm_service.generate_json.side_effect = RuntimeError("no llm")
 
@@ -55,6 +59,7 @@ def test_generate_fallback_has_all_sections(minimal_request: FeatureTemplateGene
 def test_generate_success_path_uses_normalizer(
     minimal_request: FeatureTemplateGenerateRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", False)
     gen = FeatureTemplateGenerator()
     seen: dict[str, object] = {}
 
@@ -172,6 +177,7 @@ def test_generate_uses_feature_template_timeout(
     minimal_request: FeatureTemplateGenerateRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", False)
     gen = FeatureTemplateGenerator()
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS", 123)
 
