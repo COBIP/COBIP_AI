@@ -351,6 +351,78 @@ feature template cache key: `feature-template:skeleton:v3:{sha256...}` (`ultraFa
 - `overview`·`flow`·`apiSpec`도 더 짧게 생성하도록 지시하고, 빈약한 값은 normalizer가 보정합니다.
 - trace 기대값: `skeletonMaxTokens=800`, `skeletonRagTopK=2`, `skeletonRagContentMaxChars=300`
 
+### Redis cache 운영 compose 정식 반영 (20차)
+
+19차까지 skeleton 튜닝·Redis cache 코드는 검증됐으나, EC2에서는 임시 `/tmp/docker-compose.19-cache-on.yml` override 로만 cache ON 이 유지되고 있었다. 20차부터 **`docker-compose.rag.yml`** 에 cache ON·19차 skeleton 설정을 정식 반영한다.
+
+**환경 우선순위:** `docker-compose` 의 `ai-server.environment` > 호스트 `.env` > `app/core/config.py` 기본값.
+
+| 파일 | 역할 |
+| --- | --- |
+| `docker-compose.deploy.yml` | ECR `ai-server`, Ollama, Qdrant, Redis 서비스 (기본 `RAG_ENABLED=false`) |
+| `docker-compose.rag.yml` | RAG ON, Redis cache ON, 19차 ultra-fast skeleton env (deploy 와 merge) |
+
+`docker-compose.rag.yml` 이 설정하는 값:
+
+| 변수 | 운영 값 |
+| --- | --- |
+| `REDIS_URL` | `redis://redis:6379/0` |
+| `RAG_RETRIEVAL_CACHE_ENABLED` | `true` |
+| `RAG_RETRIEVAL_CACHE_TTL_SECONDS` | `3600` |
+| `FEATURE_TEMPLATE_CACHE_ENABLED` | `true` |
+| `FEATURE_TEMPLATE_CACHE_TTL_SECONDS` | `3600` |
+| `FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED` | `true` |
+| `FEATURE_TEMPLATE_FAST_SKELETON_ENABLED` | `true` |
+| `FEATURE_TEMPLATE_SKELETON_MAX_TOKENS` | `800` |
+| `FEATURE_TEMPLATE_SKELETON_RAG_TOP_K` | `2` |
+| `FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS` | `300` |
+
+**기본 운영 실행 (임시 override 불필요):**
+
+```bash
+docker compose -f docker-compose.deploy.yml -f docker-compose.rag.yml \
+  up -d --no-build --pull never --no-deps ai-server
+```
+
+**운영 검증 절차 (EC2·운영 담당자):**
+
+1. Redis 컨테이너 확인: `docker compose -f docker-compose.deploy.yml ps redis`
+2. ai-server cache/RAG env 확인:
+
+```bash
+docker compose -f docker-compose.deploy.yml -f docker-compose.rag.yml \
+  exec ai-server env | grep -E 'REDIS_URL|RAG_RETRIEVAL_CACHE|FEATURE_TEMPLATE_CACHE|FEATURE_TEMPLATE_SKELETON'
+```
+
+기대: `REDIS_URL=redis://redis:6379/0`, `RAG_RETRIEVAL_CACHE_ENABLED=true`, `FEATURE_TEMPLATE_CACHE_ENABLED=true`, `FEATURE_TEMPLATE_SKELETON_MAX_TOKENS=800`, `FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS=300`.
+
+3. Redis ping: `docker compose -f docker-compose.deploy.yml exec redis redis-cli ping` → `PONG`
+
+4. compose merge 확인 (로컬/CI):
+
+```bash
+docker compose -f docker-compose.deploy.yml -f docker-compose.rag.yml config \
+  | grep -E 'REDIS_URL|RAG_RETRIEVAL_CACHE|FEATURE_TEMPLATE_CACHE|FEATURE_TEMPLATE_SKELETON'
+```
+
+5. Agentic RAG 기능템플릿 동일 요청 2회 (`POST /ai/agentic-rag/run`, `RAG_ENABLED` 경로):
+
+| 회차 | 기대 trace |
+| --- | --- |
+| 1회차 | `ragCacheHit=false`, `featureTemplateCacheHit=false`, `ragCacheKey`·`featureTemplateCacheKey` 존재 |
+| 2회차 | `ragCacheHit=true`, `featureTemplateCacheHit=true`, `embeddingMs=0`, `ragRetrievalMs=0`, `featureTemplateGenerationMs=0`, `totalLatencyMs` 수 ms 대 |
+
+6. TTL 확인 (양수):
+
+```bash
+docker compose -f docker-compose.deploy.yml exec redis redis-cli TTL '<ragCacheKey>'
+docker compose -f docker-compose.deploy.yml exec redis redis-cli TTL '<featureTemplateCacheKey>'
+```
+
+기대: 각각 약 3600초 이하의 양수 TTL (저장 직후 `RAG_RETRIEVAL_CACHE_TTL_SECONDS` / `FEATURE_TEMPLATE_CACHE_TTL_SECONDS` 기준).
+
+코드 정책 유지: fallback 결과는 feature template cache 에 저장하지 않음. Redis 연결 실패 시 in-memory graceful fallback.
+
 ### `source` 위치
 
 LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
