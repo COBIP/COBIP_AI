@@ -26,6 +26,10 @@ def generate_feature_template(
             "skeletonFirst": result.skeletonFirst,
             "deferredSections": result.deferredSections,
             "fastSkeletonEnabled": result.fastSkeletonEnabled,
+            "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
+            "skeletonMaxTokens": result.skeletonMaxTokens,
+            "skeletonRagTopK": result.skeletonRagTopK,
+            "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
         },
     )
 

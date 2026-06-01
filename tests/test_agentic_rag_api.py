@@ -90,7 +90,7 @@ def test_agentic_rag_feature_template_reference_context_rag_applied(
         assert request.referenceContext is not None
         assert request.referenceContext["userContext"] == "사용자 추가 맥락"
         assert request.referenceContext["ragReferences"] == [_RAG_REFERENCE]
-        _prompt, applied = build_feature_template_prompt_with_applied_rags(request)
+        _prompt, applied, _meta = build_feature_template_prompt_with_applied_rags(request)
         return FeatureTemplateGenerateResult(
             template=_minimal_template(request.featureName),
             source="ollama",
@@ -141,7 +141,7 @@ def test_agentic_rag_root_reference_context_is_ignored_for_feature_template(
     def fake_generate(self, request):
         assert request.referenceContext is not None
         assert "ragReferences" not in request.referenceContext
-        _prompt, applied = build_feature_template_prompt_with_applied_rags(request)
+        _prompt, applied, _meta = build_feature_template_prompt_with_applied_rags(request)
         return FeatureTemplateGenerateResult(
             template=_minimal_template(request.featureName),
             source="ollama",

@@ -114,6 +114,25 @@ class AgenticRagTrace(BaseModel):
         default=False,
         description="17차: fast skeleton 초안 프로필 적용 여부",
     )
+    ultraFastSkeletonEnabled: bool = Field(
+        default=False,
+        description="18차: ultra-fast skeleton 초안 프로필 적용 여부",
+    )
+    skeletonMaxTokens: int | None = Field(
+        default=None,
+        ge=0,
+        description="18차: 최초 skeleton LLM max_tokens 상한",
+    )
+    skeletonRagTopK: int | None = Field(
+        default=None,
+        ge=0,
+        description="18차: 최초 skeleton generate RAG top_k",
+    )
+    skeletonRagContentMaxChars: int | None = Field(
+        default=None,
+        ge=0,
+        description="18차: 최초 skeleton generate RAG content 최대 길이",
+    )
     # Agentic RAG 13차 — Qdrant 자동 retrieval 관측 필드
     ragRetrievalAttempted: bool = Field(
         default=False,

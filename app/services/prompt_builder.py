@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from app.prompts.feature_template_prompts import (
     FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS,
@@ -19,15 +19,23 @@ from app.prompts.feature_template_prompts import (
 from app.core.config import settings
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
+InitialSkeletonProfile = Literal["legacy", "fast", "ultra_fast"]
+
 __all__ = [
+    "InitialSkeletonProfile",
     "build_applied_references_payload",
     "build_feature_template_prompt",
     "build_feature_template_prompt_with_applied_rags",
     "build_feature_template_section_prompt",
     "extract_raw_rag_references_from_reference_context",
     "format_rag_references_for_feature_template_prompt",
+    "get_initial_generation_skeleton_metadata",
     "is_fast_skeleton_enabled_for_initial_generate",
+    "is_ultra_fast_skeleton_enabled_for_initial_generate",
+    "resolve_initial_generation_skeleton_profile",
     "select_usable_rag_references",
+    "skeleton_rag_content_max_chars_for_initial_generate",
+    "skeleton_rag_top_k_for_initial_generate",
 ]
 
 _RAG_CONTEXT_HEADER = "[검색 근거 / RAG Context]"
@@ -41,6 +49,61 @@ def _feature_template_rag_top_k() -> int:
 
 def _feature_template_rag_content_max_chars() -> int:
     return max(50, int(settings.FEATURE_TEMPLATE_RAG_CONTENT_MAX_CHARS))
+
+
+def resolve_initial_generation_skeleton_profile() -> InitialSkeletonProfile:
+    """18차: ultra-fast > fast > legacy 우선순위."""
+
+    if settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED:
+        return "ultra_fast"
+    if settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED:
+        return "fast"
+    return "legacy"
+
+
+def is_ultra_fast_skeleton_enabled_for_initial_generate() -> bool:
+    return resolve_initial_generation_skeleton_profile() == "ultra_fast"
+
+
+def is_fast_skeleton_enabled_for_initial_generate() -> bool:
+    return resolve_initial_generation_skeleton_profile() in ("fast", "ultra_fast")
+
+
+def skeleton_rag_top_k_for_initial_generate() -> int:
+    """최초 skeleton generate 프롬프트·retrieval 공통 top_k."""
+
+    profile = resolve_initial_generation_skeleton_profile()
+    if profile == "legacy":
+        return max(1, min(10, int(settings.FEATURE_TEMPLATE_RAG_TOP_K)))
+    return max(1, min(10, int(settings.FEATURE_TEMPLATE_SKELETON_RAG_TOP_K)))
+
+
+def skeleton_rag_content_max_chars_for_initial_generate() -> int:
+    profile = resolve_initial_generation_skeleton_profile()
+    if profile == "legacy":
+        return _feature_template_rag_content_max_chars()
+    return max(50, int(settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS))
+
+
+def skeleton_max_tokens_for_initial_generate() -> int | None:
+    """legacy는 상한 없음(LLM_MAX_TOKENS), fast/ultra-fast는 skeleton 전용 상한."""
+
+    if resolve_initial_generation_skeleton_profile() == "legacy":
+        return None
+    return max(64, int(settings.FEATURE_TEMPLATE_SKELETON_MAX_TOKENS))
+
+
+def get_initial_generation_skeleton_metadata() -> dict[str, Any]:
+    profile = resolve_initial_generation_skeleton_profile()
+    max_tokens = skeleton_max_tokens_for_initial_generate()
+    return {
+        "profile": profile,
+        "ultraFastSkeletonEnabled": profile == "ultra_fast",
+        "fastSkeletonEnabled": profile in ("fast", "ultra_fast"),
+        "skeletonMaxTokens": max_tokens,
+        "skeletonRagTopK": skeleton_rag_top_k_for_initial_generate(),
+        "skeletonRagContentMaxChars": skeleton_rag_content_max_chars_for_initial_generate(),
+    }
 
 
 def select_usable_rag_references(
@@ -231,22 +294,39 @@ def _reference_context_for_prompt_json(
     return out
 
 
-def is_fast_skeleton_enabled_for_initial_generate() -> bool:
-    """17차: 최초 generate fast skeleton 프로필 활성 여부."""
-
-    return bool(settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED)
-
-
 def _build_initial_generation_section_instructions(
     request: FeatureTemplateGenerateRequest,
     *,
-    fast_skeleton: bool,
+    profile: InitialSkeletonProfile,
 ) -> str:
     """include flags에 따라 최초 generate용 섹션 지시만 짧게 조립한다."""
 
-    if fast_skeleton:
+    if profile == "ultra_fast":
+        return _build_ultra_fast_skeleton_section_instructions(request)
+    if profile == "fast":
         return _build_fast_skeleton_section_instructions(request)
     return _build_legacy_initial_generation_section_instructions(request)
+
+
+def _build_ultra_fast_skeleton_section_instructions(
+    request: FeatureTemplateGenerateRequest,
+) -> str:
+    lines = [
+        "- ultra-fast skeleton: LLM은 overview·requirements·flow·apiSpec만 최소 생성한다.",
+        "- overview: purpose·resultDescription 각 1문장, learningGoals 0~3개 짧게, useCases·techStack 최소.",
+        "- requirements: 정확히 3개, 각 필드 한 문장 이하.",
+        "- flow: steps 정확히 3개, layers 3~4개, 각 role은 짧게.",
+        "- apiSpec: 핵심 API 1개, requestBody/responseBody는 짧은 JSON.",
+        "- basicQuestions: 반드시 [] (서버 normalizer가 3개 채움).",
+        "- nextRecommendations: 반드시 [] (서버 normalizer가 3개 채움).",
+        "- codeFiles/missions/interviewQuestions: include 플래그와 무관하게 반드시 [].",
+        "- RAG context는 참고만 하고 길게 재서술하지 않는다.",
+        "- 장문 설명·중복 문장·코드 본문 금지.",
+        "- 모든 필드는 schema 이름을 그대로 사용한다. goal/hints/keywords/title 단독 key 금지.",
+        '- enum: difficulty는 "beginner"|"intermediate"|"advanced".',
+        '- 타입: requirements[].priority는 문자열, apiSpec[].status는 정수, flow.steps는 문자열 배열.',
+    ]
+    return "\n".join(lines)
 
 
 def _build_fast_skeleton_section_instructions(
@@ -332,12 +412,62 @@ def _build_legacy_initial_generation_section_instructions(
 def _build_initial_generation_json_skeleton(
     request: FeatureTemplateGenerateRequest,
     *,
-    fast_skeleton: bool,
+    profile: InitialSkeletonProfile,
 ) -> str:
-    """9개 top-level key를 유지하되 fast skeleton은 예시를 최소화한다."""
+    """9개 top-level key를 유지하되 skeleton 프로필별 예시를 최소화한다."""
 
-    if fast_skeleton:
+    if profile == "ultra_fast":
         skeleton: dict[str, Any] = {
+            "overview": {
+                "featureName": request.featureName,
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [request.language]
+                + ([request.framework] if request.framework else []),
+                "learningGoals": [],
+            },
+            "requirements": [
+                {
+                    "requirementId": "R-001",
+                    "name": "",
+                    "description": "",
+                    "inputValue": "",
+                    "processCondition": "",
+                    "successResult": "",
+                    "failureResult": "",
+                    "priority": "HIGH",
+                    "relatedScreenOrApi": "",
+                }
+            ],
+            "flow": {
+                "steps": ["1) 요청", "2) 처리", "3) 응답"],
+                "layers": [
+                    {"layer": "Controller", "role": ""},
+                    {"layer": "Service", "role": ""},
+                ],
+            },
+            "apiSpec": [
+                {
+                    "apiName": "",
+                    "method": "POST",
+                    "endpoint": "/api/auth/login",
+                    "description": "",
+                    "requestBody": {},
+                    "responseBody": {},
+                    "status": 200,
+                }
+            ],
+            "codeFiles": [],
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+        return json.dumps(skeleton, ensure_ascii=False, indent=2)
+
+    if profile == "fast":
+        skeleton = {
             "overview": {
                 "featureName": request.featureName,
                 "purpose": "",
@@ -472,19 +602,23 @@ def _build_initial_generation_json_skeleton(
 
 def build_feature_template_prompt_with_applied_rags(
     request: FeatureTemplateGenerateRequest,
-) -> tuple[str, list[dict[str, Any]]]:
-    """프롬프트 문자열과 프롬프트에 반영된 RAG reference 요약(appliedReferences)을 함께 반환한다."""
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    """프롬프트, appliedReferences, skeleton 메타데이터를 함께 반환한다."""
 
     framework_text = request.framework if request.framework else "(미지정)"
+    skeleton_meta = get_initial_generation_skeleton_metadata()
+    profile: InitialSkeletonProfile = skeleton_meta["profile"]
 
     rag_refs = _extract_rag_references_from_reference_context(request.referenceContext)
+    rag_top_k = skeleton_meta["skeletonRagTopK"]
+    rag_content_max = skeleton_meta["skeletonRagContentMaxChars"]
     selected = select_usable_rag_references(
         rag_refs,
-        max_items=_feature_template_rag_top_k(),
+        max_items=rag_top_k,
     )
     rag_body = _format_rag_block_from_selected(
         selected,
-        max_content_chars=_feature_template_rag_content_max_chars(),
+        max_content_chars=rag_content_max,
     )
     applied = build_applied_references_payload(selected)
     rag_context_section = f"\n\n{rag_body}" if rag_body else ""
@@ -504,8 +638,6 @@ def build_feature_template_prompt_with_applied_rags(
     else:
         reference_context_text = "(없음)"
 
-    fast_skeleton = is_fast_skeleton_enabled_for_initial_generate()
-
     user_prompt = FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE.format(
         language=request.language,
         framework=framework_text,
@@ -518,16 +650,24 @@ def build_feature_template_prompt_with_applied_rags(
         referenceContext=reference_context_text,
         sectionInstructions=_build_initial_generation_section_instructions(
             request,
-            fast_skeleton=fast_skeleton,
+            profile=profile,
         ),
         jsonSkeleton=_build_initial_generation_json_skeleton(
             request,
-            fast_skeleton=fast_skeleton,
+            profile=profile,
         ),
     )
 
-    prompt = f"{FEATURE_TEMPLATE_SYSTEM_PROMPT}\n\n{user_prompt}"
-    return prompt, applied
+    from app.prompts.feature_template_prompts import (
+        FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT,
+    )
+
+    system_prompt = FEATURE_TEMPLATE_SYSTEM_PROMPT
+    if profile == "ultra_fast":
+        system_prompt = f"{system_prompt}\n\n{FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT}"
+
+    prompt = f"{system_prompt}\n\n{user_prompt}"
+    return prompt, applied, skeleton_meta
 
 
 def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> str:
@@ -543,7 +683,7 @@ def build_feature_template_prompt(request: FeatureTemplateGenerateRequest) -> st
     - apiSpec은 flow 다음, codeFiles 이전에 위치
     """
 
-    prompt, _applied = build_feature_template_prompt_with_applied_rags(request)
+    prompt, _applied, _meta = build_feature_template_prompt_with_applied_rags(request)
     return prompt
 
 
