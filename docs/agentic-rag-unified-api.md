@@ -312,8 +312,8 @@ cache hit 예시:
 | --- | --- | --- |
 | `FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED` | `true` | ultra-fast skeleton (fast보다 우선) |
 | `FEATURE_TEMPLATE_SKELETON_RAG_TOP_K` | `2` | 최초 skeleton generate 전용 RAG top_k |
-| `FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS` | `400` | 최초 skeleton generate 전용 RAG content 상한 |
-| `FEATURE_TEMPLATE_SKELETON_MAX_TOKENS` | `900` | 최초 skeleton LLM 출력 상한 (`regenerate-section`·chat 미적용) |
+| `FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS` | `300` | 최초 skeleton generate 전용 RAG content 상한 (19차: 400→300) |
+| `FEATURE_TEMPLATE_SKELETON_MAX_TOKENS` | `800` | 최초 skeleton LLM 출력 상한 (19차: 900→800, `regenerate-section`·chat 미적용) |
 
 프로필 우선순위: `ultra-fast` → `fast` → `legacy`.
 
@@ -321,8 +321,8 @@ cache hit 예시:
 
 - LLM은 `overview`·`requirements`(3)·`flow`·`apiSpec`(1)만 최소 생성합니다.
 - `basicQuestions`·`nextRecommendations`는 최초 generate에서 `[]`를 반환하고, **normalizer**가 로그인/Spring Boot baseline으로 3개씩 deterministic 보정합니다.
-- skeleton 전용 RAG context 축소(top_k=2, content 400자)로 prompt 부담을 줄입니다.
-- skeleton 전용 `max_tokens=900`으로 LLM 출력 상한을 둡니다.
+- skeleton 전용 RAG context 축소(top_k=2, content 300자)로 prompt 부담을 줄입니다.
+- skeleton 전용 `max_tokens=800`으로 LLM 출력 상한을 둡니다.
 
 feature template cache key: `feature-template:skeleton:v3:{sha256...}` (`ultraFastSkeletonEnabled`, `skeletonMaxTokens`, skeleton RAG 파라미터 포함).
 
@@ -334,6 +334,22 @@ feature template cache key: `feature-template:skeleton:v3:{sha256...}` (`ultraFa
 | `skeletonMaxTokens` | skeleton generate에 적용한 max_tokens (legacy는 null) |
 | `skeletonRagTopK` | skeleton generate에 사용한 RAG top_k |
 | `skeletonRagContentMaxChars` | skeleton generate에 사용한 RAG content 상한 |
+
+### ultra-fast 60초 진입 튜닝 (19차)
+
+18차 운영 검증(cache OFF 2회차) 기준 `featureTemplateGenerationMs`는 **63730ms**까지 줄었고, 60초 목표까지 약 **3.7초** 남았습니다. 19차는 **캐시가 아니라** uncached skeleton 생성 60초 이하 진입을 위한 미세 튜닝입니다.
+
+| 항목 | 18차 | 19차 |
+| --- | --- | --- |
+| `skeletonMaxTokens` | 900 | **800** |
+| `skeletonRagContentMaxChars` | 400 | **300** |
+| `skeletonRagTopK` | 2 | 2 (유지) |
+
+추가 전략:
+
+- ultra-fast prompt에서 `basicQuestions`·`nextRecommendations`·deferred 섹션은 최초 skeleton에서 `[]` 고정, **normalizer**가 로그인 baseline으로 보정합니다.
+- `overview`·`flow`·`apiSpec`도 더 짧게 생성하도록 지시하고, 빈약한 값은 normalizer가 보정합니다.
+- trace 기대값: `skeletonMaxTokens=800`, `skeletonRagTopK=2`, `skeletonRagContentMaxChars=300`
 
 ### `source` 위치
 

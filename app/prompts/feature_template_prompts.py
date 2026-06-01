@@ -52,15 +52,15 @@ FEATURE_TEMPLATE_FAST_SKELETON_SUPPLEMENT = """\
 - 상세 보강은 regenerate-section과 서버 normalizer가 담당한다."""
 
 FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT = """\
-[ultra-fast skeleton 초안 모드]
+[ultra-fast skeleton 초안 모드 — 19차 60초 진입 튜닝]
 - 최초 generate는 overview·requirements·flow·apiSpec만 최소 생성한다.
-- overview.purpose·resultDescription은 각 1문장, learningGoals는 0~3개 짧게.
-- requirements는 정확히 3개, 각 필드는 짧게.
-- flow.steps는 정확히 3개, flow.layers는 3~4개.
-- apiSpec은 핵심 API 1개만.
-- basicQuestions, nextRecommendations, codeFiles, missions, interviewQuestions는 반드시 []만 반환한다.
-- RAG context는 참고만 하고 길게 재서술하지 않는다.
-- basicQuestions·nextRecommendations는 서버 normalizer가 deterministic하게 채운다."""
+- overview.purpose·resultDescription은 각 1문장·50자 내외. learningGoals는 [] 허용 또는 최대 2개.
+- requirements는 정확히 3개. description/processCondition/successResult/failureResult는 각 짧게.
+- flow.steps는 3개 이하, flow.layers는 3개 이하. 각 role은 짧게.
+- apiSpec은 1개만. requestBody/responseBody는 최소 필드만.
+- basicQuestions, nextRecommendations, codeFiles, missions, interviewQuestions는 반드시 [].
+- RAG 내용을 요약·재서술하지 말고 requirements/apiSpec/flow에만 반영한다.
+- basicQuestions·nextRecommendations·짧은 overview/flow는 서버 normalizer가 보정한다."""
 
 
 FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\
