@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.services.embedding_warmup_state import embedding_warmup_status_dict
 from app.services.qdrant_service import QdrantService
 
 router = APIRouter(tags=["health"])
@@ -14,5 +15,6 @@ def health() -> dict:
         "data": {
             "status": "ok",
             "qdrant": qdrant,
+            **embedding_warmup_status_dict(),
         },
     }

@@ -1,13 +1,11 @@
 import logging
-import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import agentic, chat, evaluation, feature_template, grammar, health, rag
-from app.core.config import settings
-from app.services.embedding_service import EmbeddingService
+from app.services.embedding_warmup_state import run_startup_embedding_warmup
 
 
 @asynccontextmanager
@@ -22,17 +20,7 @@ async def lifespan(_: FastAPI):
         app_logger.addHandler(handler)
         app_logger.setLevel(logging.INFO)
 
-    if settings.EMBEDDING_WARMUP_ENABLED and settings.RAG_ENABLED:
-        t0 = time.perf_counter()
-        app_logger.info("embedding warmup start")
-        ok = EmbeddingService().warm_up(settings.EMBEDDING_WARMUP_TEXT)
-        elapsed = max(0, int((time.perf_counter() - t0) * 1000))
-        if ok:
-            app_logger.info("embedding warmup success elapsedMs=%s", elapsed)
-        else:
-            app_logger.warning("embedding warmup failed elapsedMs=%s", elapsed)
-    elif settings.EMBEDDING_WARMUP_ENABLED:
-        app_logger.info("embedding warmup skipped reason=rag_disabled")
+    run_startup_embedding_warmup(app_logger)
     yield
 
 

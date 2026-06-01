@@ -423,6 +423,43 @@ docker compose -f docker-compose.deploy.yml exec redis redis-cli TTL '<featureTe
 
 코드 정책 유지: fallback 결과는 feature template cache 에 저장하지 않음. Redis 연결 실패 시 in-memory graceful fallback.
 
+### embedding warm-up 운영 기본화 (21차)
+
+20차에서 Redis cache ON 은 정식 compose 에 반영됐지만, **첫 기능템플릿 요청**은 embedding cold start 로 `embeddingMs`·`ragRetrievalMs` 가 60초 이상 튈 수 있어 `totalLatencyMs` 가 90초를 넘을 수 있다. 반복 요청은 cache hit 으로 수 ms 수준이다.
+
+21차는 **서버 startup 시** RAG 와 동일한 `EmbeddingService` shared model 경로로 warm-up 을 수행해, 사용자 첫 요청에서 모델 로딩 지연을 제거하는 것이 목표다.
+
+| 설정 | 로컬 기본 | 운영 (`docker-compose.rag.yml`) |
+| --- | --- | --- |
+| `EMBEDDING_WARMUP_ENABLED` | `false` | `true` |
+| `EMBEDDING_WARMUP_TEXT` | Spring Boot 로그인… | 동일 |
+
+동작:
+
+- `RAG_ENABLED=true` 이고 `EMBEDDING_WARMUP_ENABLED=true` 일 때만 startup warm-up 수행
+- `embed_query` → `_get_model()` 로 **process-level shared** `SentenceTransformer` 로드 (RAG retrieval 과 동일 인스턴스)
+- warm-up 실패 시 warning 로그만 남기고 **앱 기동은 계속**
+- `GET /ai/health` 의 `data` 에 warm-up 관측 필드 추가 (기존 `status`·`qdrant` 유지)
+
+startup 로그 예:
+
+- `Embedding warm-up started ...`
+- `Embedding warm-up completed in XXXX ms (shared model loaded for RAG retrieval)`
+- `Embedding warm-up skipped because RAG_ENABLED=false`
+- `Embedding warm-up failed but startup continues: ...`
+
+**운영 검증 기대:**
+
+1. 컨테이너 재기동 후 `docker logs` 에 warm-up completed 확인
+2. **첫** `POST /ai/agentic-rag/run` (cache miss): `embeddingMs` 가 60초 이상이 아니어야 함 (수백 ms~수 초 수준)
+3. **두 번째** 동일 요청: `ragCacheHit=true`, `featureTemplateCacheHit=true`, `embeddingMs=0`, `featureTemplateGenerationMs=0`
+4. `GET /ai/health` → `embeddingWarmupAttempted=true`, `embeddingWarmupSucceeded=true` (warm-up 성공 시)
+
+```bash
+docker compose -f docker-compose.deploy.yml -f docker-compose.rag.yml config \
+  | grep -E 'EMBEDDING_WARMUP|REDIS_URL|RAG_RETRIEVAL_CACHE|FEATURE_TEMPLATE_CACHE|FEATURE_TEMPLATE_SKELETON'
+```
+
 ### `source` 위치
 
 LLM/폴백 출처는 결과 본문과 trace에 함께 제공됩니다.
