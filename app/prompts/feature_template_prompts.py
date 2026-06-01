@@ -8,6 +8,7 @@ LLM 을 챗봇처럼 자유 응답시키지 않고, 백엔드 내부 JSON 생성
 """
 
 __all__ = [
+    "FEATURE_TEMPLATE_FAST_SKELETON_SUPPLEMENT",
     "FEATURE_TEMPLATE_SYSTEM_PROMPT",
     "FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE",
     "FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS",
@@ -35,6 +36,19 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - placeholder, TODO, 생략, 점 세 개, "실제 동작 가능한 코드 문자열" 같은 더미·준비용 문구를 쓰지 않는다.
 - 최초 generate는 skeleton-first 전략이다. 기본 구조만 빠르게 만들고 상세 코드·미션·면접 답변은 regenerate-section으로 보완한다.
 """
+
+FEATURE_TEMPLATE_FAST_SKELETON_SUPPLEMENT = """\
+[fast skeleton 초안 모드]
+- 최초 generate는 짧은 초안 skeleton만 만든다. 장문 설명·상세 근거·긴 배열·코드 본문은 금지한다.
+- overview.purpose와 overview.resultDescription은 각각 1~2문장으로 짧게 쓴다.
+- overview.learningGoals는 최대 3개, 각 항목은 20자 내외로 짧게 쓴다.
+- requirements는 정확히 3개, 각 필드는 한 문장 수준으로 짧게 쓴다.
+- flow.steps는 3~4개, flow.layers는 4~5개 이하로 핵심 계층만 짧게 쓴다.
+- apiSpec은 핵심 API 1개만 작성한다.
+- basicQuestions는 정확히 3개, explanation은 1문장으로 짧게 쓴다.
+- nextRecommendations는 정확히 3개만 작성한다.
+- codeFiles, missions, interviewQuestions는 include 플래그와 무관하게 반드시 []만 반환한다.
+- 상세 보강은 regenerate-section과 서버 normalizer가 담당한다."""
 
 
 FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\

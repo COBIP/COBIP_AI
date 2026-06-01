@@ -44,6 +44,7 @@ from app.services.llm_service import LLMService
 from app.services.prompt_builder import (
     build_feature_template_prompt_with_applied_rags,
     build_feature_template_section_prompt,
+    is_fast_skeleton_enabled_for_initial_generate,
 )
 
 __all__ = ["FeatureTemplateGenerator"]
@@ -93,6 +94,7 @@ class FeatureTemplateGenerator:
         self._llm_service = llm_service or LLMService()
 
     def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateGenerateResult:
+        fast_skeleton = is_fast_skeleton_enabled_for_initial_generate()
         prompt, applied_refs = build_feature_template_prompt_with_applied_rags(request)
 
         try:
@@ -125,6 +127,7 @@ class FeatureTemplateGenerator:
                 generationMode="fallback",
                 skeletonFirst=True,
                 deferredSections=list(_DEFERRED_INITIAL_SECTIONS),
+                fastSkeletonEnabled=fast_skeleton,
             )
 
         logger.info(
@@ -138,6 +141,7 @@ class FeatureTemplateGenerator:
             generationMode=_INITIAL_GENERATION_MODE,
             skeletonFirst=True,
             deferredSections=list(_DEFERRED_INITIAL_SECTIONS),
+            fastSkeletonEnabled=fast_skeleton,
         )
 
     def regenerate_section(

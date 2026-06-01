@@ -209,6 +209,10 @@ class FeatureTemplateGenerateResult(BaseModel):
         default_factory=lambda: ["codeFiles", "missions", "interviewQuestions"],
         description="최초 generate에서 상세 생성을 regenerate-section으로 미루는 섹션",
     )
+    fastSkeletonEnabled: bool = Field(
+        default=False,
+        description="17차: fast skeleton 초안 프로필 적용 여부",
+    )
 
 
 class FeatureTemplateGenerateResponse(BaseModel):
@@ -223,6 +227,7 @@ class FeatureTemplateGenerateResponse(BaseModel):
     deferredSections: list[str] = Field(
         default_factory=lambda: ["codeFiles", "missions", "interviewQuestions"]
     )
+    fastSkeletonEnabled: bool = False
 
 
 class FeatureTemplateRegenerateSectionResult(BaseModel):

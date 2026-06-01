@@ -110,6 +110,10 @@ class AgenticRagTrace(BaseModel):
         default_factory=list,
         description="최초 generate에서 상세 생성을 regenerate-section으로 미룬 섹션",
     )
+    fastSkeletonEnabled: bool = Field(
+        default=False,
+        description="17차: fast skeleton 초안 프로필 적용 여부",
+    )
     # Agentic RAG 13차 — Qdrant 자동 retrieval 관측 필드
     ragRetrievalAttempted: bool = Field(
         default=False,
