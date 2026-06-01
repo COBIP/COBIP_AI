@@ -264,7 +264,7 @@ chat 경로일 때 `data.result.agent.trace`에는 `/ai/chat`과 동일한 **하
 
 - Redis가 없거나 연결 실패해도 요청은 실패하지 않으며 기존 흐름으로 계속 동작합니다 (graceful fallback).
 - retrieval cache key: `rag:feature-template:v1:{sha256...}`
-- feature template cache key: `feature-template:skeleton:v2:{sha256...}` (17차부터, `fastSkeletonEnabled` 포함)
+- feature template cache key: `feature-template:skeleton:v3:{sha256...}` (18차부터 ultra-fast·skeleton RAG·max_tokens 포함)
 - fallback 결과(`source=fallback`)는 feature template cache에 저장하지 않습니다.
 
 16차 추가 trace 필드:
@@ -296,13 +296,44 @@ cache hit 예시:
 
 - `generationMode=skeleton`, `skeletonFirst=true`, `deferredSections=["codeFiles","missions","interviewQuestions"]` 는 12차 정책 그대로 유지합니다.
 - `codeFiles` / `missions` / `interviewQuestions` 는 include 플래그와 무관하게 최초 generate에서 `[]` 우선입니다. 상세는 `regenerate-section` + normalizer 로그인 baseline 보정으로 보강합니다.
-- feature template cache key: `feature-template:skeleton:v2:{sha256...}` (`fastSkeletonEnabled` 설정값 포함)
+- feature template cache key: `feature-template:skeleton:v2:{sha256...}` (`fastSkeletonEnabled` 설정값 포함, 18차 이후 v3)
 
 17차 추가 trace/result 필드:
 
 | 필드 | 설명 |
 | --- | --- |
 | `fastSkeletonEnabled` | fast skeleton 프로필 적용 여부 |
+
+### ultra-fast skeleton (18차)
+
+17차 운영 검증(cache OFF) 기준 `featureTemplateGenerationMs`는 약 75초까지 줄었으나 60초 목표에는 미달했습니다. RAG/embedding(`ragRetrievalMs` ~700ms)은 병목이 아니며, **cache miss·uncached 첫 생성**의 병목은 Ollama LLM skeleton 생성 시간입니다. 18차는 **캐시 hit 최적화가 아니라** uncached 첫 생성 자체를 줄이는 작업입니다.
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED` | `true` | ultra-fast skeleton (fast보다 우선) |
+| `FEATURE_TEMPLATE_SKELETON_RAG_TOP_K` | `2` | 최초 skeleton generate 전용 RAG top_k |
+| `FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS` | `400` | 최초 skeleton generate 전용 RAG content 상한 |
+| `FEATURE_TEMPLATE_SKELETON_MAX_TOKENS` | `900` | 최초 skeleton LLM 출력 상한 (`regenerate-section`·chat 미적용) |
+
+프로필 우선순위: `ultra-fast` → `fast` → `legacy`.
+
+전략:
+
+- LLM은 `overview`·`requirements`(3)·`flow`·`apiSpec`(1)만 최소 생성합니다.
+- `basicQuestions`·`nextRecommendations`는 최초 generate에서 `[]`를 반환하고, **normalizer**가 로그인/Spring Boot baseline으로 3개씩 deterministic 보정합니다.
+- skeleton 전용 RAG context 축소(top_k=2, content 400자)로 prompt 부담을 줄입니다.
+- skeleton 전용 `max_tokens=900`으로 LLM 출력 상한을 둡니다.
+
+feature template cache key: `feature-template:skeleton:v3:{sha256...}` (`ultraFastSkeletonEnabled`, `skeletonMaxTokens`, skeleton RAG 파라미터 포함).
+
+18차 추가 trace/result 필드:
+
+| 필드 | 설명 |
+| --- | --- |
+| `ultraFastSkeletonEnabled` | ultra-fast skeleton 적용 여부 |
+| `skeletonMaxTokens` | skeleton generate에 적용한 max_tokens (legacy는 null) |
+| `skeletonRagTopK` | skeleton generate에 사용한 RAG top_k |
+| `skeletonRagContentMaxChars` | skeleton generate에 사용한 RAG content 상한 |
 
 ### `source` 위치
 

@@ -25,11 +25,13 @@ def _req(**kwargs: object) -> FeatureTemplateGenerateRequest:
     return FeatureTemplateGenerateRequest(**base)
 
 
-def test_fast_skeleton_enabled_by_default() -> None:
+def test_fast_skeleton_enabled_by_default(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     assert is_fast_skeleton_enabled_for_initial_generate() is True
 
 
 def test_fast_skeleton_prompt_shorter_than_legacy(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     fast_text = build_feature_template_prompt(_req())
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", False)
     legacy_text = build_feature_template_prompt(_req())
@@ -37,6 +39,7 @@ def test_fast_skeleton_prompt_shorter_than_legacy(monkeypatch) -> None:
 
 
 def test_fast_skeleton_prompt_has_tight_limits(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     text = build_feature_template_prompt(_req())
     assert "fast skeleton" in text or "[fast skeleton 초안 모드]" in text
@@ -47,6 +50,7 @@ def test_fast_skeleton_prompt_has_tight_limits(monkeypatch) -> None:
 
 
 def test_fast_skeleton_include_code_still_forbids_codefiles(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     text = build_feature_template_prompt(_req(includeCode=True))
     assert "코드 본문·stub·파일명 나열은 금지" in text
@@ -56,6 +60,7 @@ def test_fast_skeleton_include_code_still_forbids_codefiles(monkeypatch) -> None
 def test_fast_skeleton_trace_field_on_generate_result(monkeypatch) -> None:
     from unittest.mock import MagicMock
 
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     gen = FeatureTemplateGenerator(llm_service=MagicMock())
     gen._llm_service.generate_json.side_effect = RuntimeError("no llm")

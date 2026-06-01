@@ -213,6 +213,22 @@ class FeatureTemplateGenerateResult(BaseModel):
         default=False,
         description="17차: fast skeleton 초안 프로필 적용 여부",
     )
+    ultraFastSkeletonEnabled: bool = Field(
+        default=False,
+        description="18차: ultra-fast skeleton 초안 프로필 적용 여부",
+    )
+    skeletonMaxTokens: int | None = Field(
+        default=None,
+        description="18차: 최초 skeleton LLM 출력 상한(max_tokens). legacy는 None",
+    )
+    skeletonRagTopK: int | None = Field(
+        default=None,
+        description="18차: 최초 skeleton generate에 사용한 RAG top_k",
+    )
+    skeletonRagContentMaxChars: int | None = Field(
+        default=None,
+        description="18차: 최초 skeleton generate에 사용한 RAG content 최대 길이",
+    )
 
 
 class FeatureTemplateGenerateResponse(BaseModel):
@@ -228,6 +244,10 @@ class FeatureTemplateGenerateResponse(BaseModel):
         default_factory=lambda: ["codeFiles", "missions", "interviewQuestions"]
     )
     fastSkeletonEnabled: bool = False
+    ultraFastSkeletonEnabled: bool = False
+    skeletonMaxTokens: int | None = None
+    skeletonRagTopK: int | None = None
+    skeletonRagContentMaxChars: int | None = None
 
 
 class FeatureTemplateRegenerateSectionResult(BaseModel):

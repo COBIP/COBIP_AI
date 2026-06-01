@@ -259,6 +259,7 @@ class AgentOrchestrator:
         from app.services.prompt_builder import (
             extract_raw_rag_references_from_reference_context,
             select_usable_rag_references,
+            skeleton_rag_top_k_for_initial_generate,
         )
         from app.services.rag_service import (
             RagSourceLabel,
@@ -289,9 +290,10 @@ class AgentOrchestrator:
         )
         steps.append("rag_retrieval_attempted")
         rag_t0 = time.perf_counter()
+        skeleton_rag_top_k = skeleton_rag_top_k_for_initial_generate()
         retrieval = retrieve_feature_template_rag_references(
             query=retrieval_query,
-            top_k=settings.FEATURE_TEMPLATE_RAG_TOP_K,
+            top_k=skeleton_rag_top_k,
             cache_service=cache_service,
         )
         rag_retrieval_ms = max(0, int((time.perf_counter() - rag_t0) * 1000))
@@ -362,6 +364,17 @@ class AgentOrchestrator:
                                 settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED,
                             )
                         ),
+                        ultraFastSkeletonEnabled=bool(
+                            cached_ft.get(
+                                "ultraFastSkeletonEnabled",
+                                settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED,
+                            )
+                        ),
+                        skeletonMaxTokens=cached_ft.get("skeletonMaxTokens"),
+                        skeletonRagTopK=cached_ft.get("skeletonRagTopK"),
+                        skeletonRagContentMaxChars=cached_ft.get(
+                            "skeletonRagContentMaxChars"
+                        ),
                     )
                     feature_template_cache_hit = True
                     steps.append("feature_template_cache_hit")
@@ -382,6 +395,10 @@ class AgentOrchestrator:
                         "skeletonFirst": result.skeletonFirst,
                         "deferredSections": result.deferredSections,
                         "fastSkeletonEnabled": result.fastSkeletonEnabled,
+                        "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
+                        "skeletonMaxTokens": result.skeletonMaxTokens,
+                        "skeletonRagTopK": result.skeletonRagTopK,
+                        "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
                     },
                     settings.FEATURE_TEMPLATE_CACHE_TTL_SECONDS,
                 )
@@ -428,6 +445,10 @@ class AgentOrchestrator:
             skeletonFirst=result.skeletonFirst,
             deferredSections=result.deferredSections,
             fastSkeletonEnabled=result.fastSkeletonEnabled,
+            ultraFastSkeletonEnabled=result.ultraFastSkeletonEnabled,
+            skeletonMaxTokens=result.skeletonMaxTokens,
+            skeletonRagTopK=result.skeletonRagTopK or skeleton_rag_top_k,
+            skeletonRagContentMaxChars=result.skeletonRagContentMaxChars,
             ragRetrievalAttempted=retrieval.attempted,
             ragRetrievalStatus=retrieval.status,
             ragRetrievedCount=retrieval.retrieved_count,
@@ -459,6 +480,10 @@ class AgentOrchestrator:
                 "skeletonFirst": result.skeletonFirst,
                 "deferredSections": result.deferredSections,
                 "fastSkeletonEnabled": result.fastSkeletonEnabled,
+                "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
+                "skeletonMaxTokens": result.skeletonMaxTokens,
+                "skeletonRagTopK": result.skeletonRagTopK,
+                "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
             },
             trace=trace,
         )
@@ -480,9 +505,13 @@ class AgentOrchestrator:
             "includeInterview": feature_request.includeInterview,
             "ragReferences": rag_references,
             "fastSkeletonEnabled": settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED,
-            "version": "v2",
+            "ultraFastSkeletonEnabled": settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED,
+            "skeletonMaxTokens": settings.FEATURE_TEMPLATE_SKELETON_MAX_TOKENS,
+            "skeletonRagTopK": settings.FEATURE_TEMPLATE_SKELETON_RAG_TOP_K,
+            "skeletonRagContentMaxChars": settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS,
+            "version": "v3",
         }
-        return cache_service.build_hashed_key("feature-template:skeleton:v2", payload)
+        return cache_service.build_hashed_key("feature-template:skeleton:v3", payload)
 
     @staticmethod
     def _classify_agentic_intent_with_reason(

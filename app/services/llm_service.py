@@ -51,6 +51,7 @@ class LLMService:
         system_prompt: str | None = None,
         *,
         timeout_seconds: int | float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """단일 prompt 로 텍스트 응답을 받는다.
 
@@ -72,7 +73,11 @@ class LLMService:
             system_prompt=system,
             user_prompt=prompt,
         )
-        result = self.call_llm(messages, timeout_seconds=timeout_seconds)
+        result = self.call_llm(
+            messages,
+            timeout_seconds=timeout_seconds,
+            max_tokens=max_tokens,
+        )
         return self._extract_content(result)
 
     def generate_json(
@@ -80,6 +85,7 @@ class LLMService:
         prompt: str,
         *,
         timeout_seconds: int | float | None = None,
+        max_tokens: int | None = None,
     ) -> dict:
         """단일 prompt 로 JSON 응답을 받아 dict 로 반환한다.
 
@@ -89,7 +95,11 @@ class LLMService:
         if not settings.OLLAMA_BASE_URL:
             return self._mock_json(prompt)
 
-        text = self.generate_text(prompt, timeout_seconds=timeout_seconds)
+        text = self.generate_text(
+            prompt,
+            timeout_seconds=timeout_seconds,
+            max_tokens=max_tokens,
+        )
         return self._parse_json_object(text)
 
     def call_llm(
@@ -97,6 +107,7 @@ class LLMService:
         messages: list[dict],
         *,
         timeout_seconds: int | float | None = None,
+        max_tokens: int | None = None,
     ) -> dict:
         """OpenAI-호환 /chat/completions 엔드포인트를 호출한다.
 
@@ -109,11 +120,12 @@ class LLMService:
 
         url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/chat/completions"
         model_name = settings.OLLAMA_MODEL
+        token_limit = max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS
         payload = {
             "model": model_name,
             "messages": messages,
             "temperature": settings.LLM_TEMPERATURE,
-            "max_tokens": settings.LLM_MAX_TOKENS,
+            "max_tokens": token_limit,
         }
 
         timeout = timeout_seconds if timeout_seconds is not None else settings.LLM_TIMEOUT_SECONDS

@@ -86,20 +86,21 @@ def test_prompt_forbids_placeholder_dummy_phrases() -> None:
 def test_prompt_quality_minimums() -> None:
     text = build_feature_template_prompt(_req())
     assert "requirements: 정확히 3개" in text
-    assert "basicQuestions: 정확히 3개" in text
+    assert "basicQuestions" in text
 
 
 def test_prompt_initial_generation_lightweight_policy() -> None:
     text = build_feature_template_prompt(_req())
-    assert "skeleton-first" in text or "fast skeleton" in text
-    assert "regenerate-section" in text
+    assert "skeleton-first" in text or "ultra-fast" in text or "fast skeleton" in text
+    assert "regenerate-section" in text or "normalizer" in text
     assert "requirements: 정확히 3개" in text
-    assert "basicQuestions: 정확히 3개" in text
-    assert "nextRecommendations: 정확히 3개" in text
-    assert "steps 3~4개" in text or "flow: steps" in text
+    assert "basicQuestions" in text
+    assert "nextRecommendations" in text
+    assert "flow" in text
 
 
 def test_prompt_limits_initial_codefiles_volume(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", False)
     text = build_feature_template_prompt(_req(framework="Spring Boot"))
     assert "상세 코드를 만들지 않는다" in text
@@ -111,7 +112,9 @@ def test_prompt_limits_initial_codefiles_volume(monkeypatch) -> None:
     assert "상세 코드는 regenerate-section에서 생성" in text
 
 
-def test_prompt_fast_skeleton_forbids_code_stubs() -> None:
+def test_prompt_fast_skeleton_forbids_code_stubs(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     text = build_feature_template_prompt(_req(framework="Spring Boot"))
     assert "코드 본문·stub·파일명 나열은 금지" in text
     assert "LoginController.java" not in text
@@ -121,7 +124,7 @@ def test_prompt_limits_optional_sections_for_initial_generation() -> None:
     text = build_feature_template_prompt(_req())
     assert "missions" in text and "[]" in text
     assert "interviewQuestions" in text
-    assert "nextRecommendations: 정확히 3개" in text
+    assert "nextRecommendations" in text
 
 
 def test_prompt_keeps_empty_array_rules_when_flags_false() -> None:
@@ -176,8 +179,8 @@ def test_prompt_7_4_content_quality_minimums_and_api_json() -> None:
     """7-4: 실무형 품질 지시·최소 개수·apiSpec 예시 JSON·스키마 밖 key 금지 유지."""
     text = build_feature_template_prompt(_req())
     assert "requirements: 정확히 3개" in text
-    assert "basicQuestions: 정확히 3개" in text
-    assert "nextRecommendations: 정확히 3개" in text
+    assert "basicQuestions" in text
+    assert "nextRecommendations" in text
     assert '"missions": []' in text
     assert '"interviewQuestions": []' in text
     assert "goal/hints/keywords/title" in text

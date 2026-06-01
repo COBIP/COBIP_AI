@@ -9,6 +9,7 @@ LLM 을 챗봇처럼 자유 응답시키지 않고, 백엔드 내부 JSON 생성
 
 __all__ = [
     "FEATURE_TEMPLATE_FAST_SKELETON_SUPPLEMENT",
+    "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT",
     "FEATURE_TEMPLATE_SYSTEM_PROMPT",
     "FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE",
     "FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS",
@@ -49,6 +50,17 @@ FEATURE_TEMPLATE_FAST_SKELETON_SUPPLEMENT = """\
 - nextRecommendations는 정확히 3개만 작성한다.
 - codeFiles, missions, interviewQuestions는 include 플래그와 무관하게 반드시 []만 반환한다.
 - 상세 보강은 regenerate-section과 서버 normalizer가 담당한다."""
+
+FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT = """\
+[ultra-fast skeleton 초안 모드]
+- 최초 generate는 overview·requirements·flow·apiSpec만 최소 생성한다.
+- overview.purpose·resultDescription은 각 1문장, learningGoals는 0~3개 짧게.
+- requirements는 정확히 3개, 각 필드는 짧게.
+- flow.steps는 정확히 3개, flow.layers는 3~4개.
+- apiSpec은 핵심 API 1개만.
+- basicQuestions, nextRecommendations, codeFiles, missions, interviewQuestions는 반드시 []만 반환한다.
+- RAG context는 참고만 하고 길게 재서술하지 않는다.
+- basicQuestions·nextRecommendations는 서버 normalizer가 deterministic하게 채운다."""
 
 
 FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE = """\

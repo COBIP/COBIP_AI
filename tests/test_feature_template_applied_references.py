@@ -97,7 +97,7 @@ def test_empty_content_reference_excluded_from_prompt_and_applied() -> None:
     selected = select_usable_rag_references(refs)
     assert len(selected) == 1
     assert selected[0]["title"] == "Spring Boot 로그인 API 가이드"
-    prompt, applied = build_feature_template_prompt_with_applied_rags(
+    prompt, applied, _meta = build_feature_template_prompt_with_applied_rags(
         FeatureTemplateGenerateRequest(
             language="java",
             featureName="x",
@@ -125,9 +125,10 @@ def test_feature_template_top_k_limits_applied_and_in_prompt(
         level=DifficultyLevel.BEGINNER,
         referenceContext={"ragReferences": refs},
     )
-    prompt, applied2 = build_feature_template_prompt_with_applied_rags(req)
-    assert len(applied2) == 3
-    assert prompt.count("   제목:") == 3
+    prompt, applied2, meta2 = build_feature_template_prompt_with_applied_rags(req)
+    skeleton_top_k = meta2["skeletonRagTopK"]
+    assert len(applied2) == skeleton_top_k
+    assert prompt.count("   제목:") == skeleton_top_k
     applied = build_applied_references_payload(
         select_usable_rag_references(refs, max_items=3)
     )
@@ -149,6 +150,6 @@ def test_prompt_and_applied_share_same_selection() -> None:
         level=DifficultyLevel.BEGINNER,
         referenceContext={"ragReferences": [_MOCK_REF]},
     )
-    prompt, applied = build_feature_template_prompt_with_applied_rags(req)
+    prompt, applied, _meta = build_feature_template_prompt_with_applied_rags(req)
     assert "[검색 근거 / RAG Context]" in prompt
     assert applied[0]["title"] in prompt
