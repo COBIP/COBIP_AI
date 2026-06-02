@@ -203,6 +203,7 @@ class FeatureTemplateGenerateResult(BaseModel):
         "fallback",
         "section_regenerated",
         "quality_instant_skeleton",
+        "quality_instant_full",
     ] = Field(
         default="skeleton",
         description="최초 generate 생성 전략. 12차부터 기본값은 skeleton-first",
@@ -243,6 +244,10 @@ class FeatureTemplateGenerateResult(BaseModel):
         default=False,
         description="22차: deterministic quality baseline 적용 여부",
     )
+    instantFullBaselineApplied: bool = Field(
+        default=False,
+        description="23차: include flags에 맞춘 instant full baseline(code/mission/interview) 적용 여부",
+    )
     initialLlmEnhancementAttempted: bool = Field(
         default=False,
         description="22차: 최초 generate optional LLM enhancement 시도 여부",
@@ -271,6 +276,7 @@ class FeatureTemplateGenerateResponse(BaseModel):
         "fallback",
         "section_regenerated",
         "quality_instant_skeleton",
+        "quality_instant_full",
     ] = "skeleton"
     skeletonFirst: bool = True
     deferredSections: list[str] = Field(
@@ -283,6 +289,7 @@ class FeatureTemplateGenerateResponse(BaseModel):
     skeletonRagContentMaxChars: int | None = None
     instantSkeletonUsed: bool = False
     qualityBaselineApplied: bool = False
+    instantFullBaselineApplied: bool = False
     initialLlmEnhancementAttempted: bool = False
     initialLlmEnhancementSucceeded: bool = False
     initialLlmEnhancementMs: int | None = None

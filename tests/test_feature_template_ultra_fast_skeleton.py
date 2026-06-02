@@ -202,7 +202,7 @@ def test_feature_template_cache_key_includes_ultra_fast_settings() -> None:
         feature_request=req,
         rag_references=[],
     )
-    assert "feature-template:skeleton:v4:" in key
+    assert "feature-template:instant-full:v5:" in key
 
 
 def test_skeleton_metadata_serializable() -> None:
