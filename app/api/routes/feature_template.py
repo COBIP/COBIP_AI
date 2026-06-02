@@ -15,6 +15,7 @@ def generate_feature_template(
     request: FeatureTemplateGenerateRequest,
 ) -> ApiResponse:
     result = FeatureTemplateGenerator().generate(request)
+    metadata = FeatureTemplateGenerator.result_metadata_payload(result)
     return ApiResponse(
         success=True,
         message="기능템플릿 생성이 완료되었습니다.",
@@ -22,14 +23,7 @@ def generate_feature_template(
             "template": result.template.model_dump(),
             "source": result.source,
             "appliedReferences": result.appliedReferences,
-            "generationMode": result.generationMode,
-            "skeletonFirst": result.skeletonFirst,
-            "deferredSections": result.deferredSections,
-            "fastSkeletonEnabled": result.fastSkeletonEnabled,
-            "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
-            "skeletonMaxTokens": result.skeletonMaxTokens,
-            "skeletonRagTopK": result.skeletonRagTopK,
-            "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
+            **metadata,
         },
     )
 

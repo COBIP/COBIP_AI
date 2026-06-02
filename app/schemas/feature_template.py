@@ -192,12 +192,18 @@ class FeatureTemplateData(BaseModel):
 
 class FeatureTemplateGenerateResult(BaseModel):
     template: FeatureTemplateData
-    source: Literal["ollama", "fallback"]
+    source: Literal["ollama", "fallback", "instant"]
     appliedReferences: list[dict[str, Any]] = Field(
         default_factory=list,
         description="프롬프트에 주입된 RAG reference 요약(실제 LLM 인용 여부와 무관)",
     )
-    generationMode: Literal["skeleton", "llm_full", "fallback", "section_regenerated"] = Field(
+    generationMode: Literal[
+        "skeleton",
+        "llm_full",
+        "fallback",
+        "section_regenerated",
+        "quality_instant_skeleton",
+    ] = Field(
         default="skeleton",
         description="최초 generate 생성 전략. 12차부터 기본값은 skeleton-first",
     )
@@ -229,16 +235,43 @@ class FeatureTemplateGenerateResult(BaseModel):
         default=None,
         description="18차: 최초 skeleton generate에 사용한 RAG content 최대 길이",
     )
+    instantSkeletonUsed: bool = Field(
+        default=False,
+        description="22차: quality instant skeleton 경로 사용 여부",
+    )
+    qualityBaselineApplied: bool = Field(
+        default=False,
+        description="22차: deterministic quality baseline 적용 여부",
+    )
+    initialLlmEnhancementAttempted: bool = Field(
+        default=False,
+        description="22차: 최초 generate optional LLM enhancement 시도 여부",
+    )
+    initialLlmEnhancementSucceeded: bool = Field(
+        default=False,
+        description="22차: optional LLM enhancement 성공 여부",
+    )
+    initialLlmEnhancementMs: int | None = Field(
+        default=None,
+        ge=0,
+        description="22차: optional LLM enhancement 소요(ms)",
+    )
 
 
 class FeatureTemplateGenerateResponse(BaseModel):
     template: FeatureTemplateData
-    source: Literal["ollama", "fallback"]
+    source: Literal["ollama", "fallback", "instant"]
     appliedReferences: list[dict[str, Any]] = Field(
         default_factory=list,
         description="프롬프트에 주입된 RAG reference 요약",
     )
-    generationMode: Literal["skeleton", "llm_full", "fallback", "section_regenerated"] = "skeleton"
+    generationMode: Literal[
+        "skeleton",
+        "llm_full",
+        "fallback",
+        "section_regenerated",
+        "quality_instant_skeleton",
+    ] = "skeleton"
     skeletonFirst: bool = True
     deferredSections: list[str] = Field(
         default_factory=lambda: ["codeFiles", "missions", "interviewQuestions"]
@@ -248,6 +281,11 @@ class FeatureTemplateGenerateResponse(BaseModel):
     skeletonMaxTokens: int | None = None
     skeletonRagTopK: int | None = None
     skeletonRagContentMaxChars: int | None = None
+    instantSkeletonUsed: bool = False
+    qualityBaselineApplied: bool = False
+    initialLlmEnhancementAttempted: bool = False
+    initialLlmEnhancementSucceeded: bool = False
+    initialLlmEnhancementMs: int | None = None
 
 
 class FeatureTemplateRegenerateSectionResult(BaseModel):

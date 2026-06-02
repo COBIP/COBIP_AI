@@ -120,6 +120,7 @@ def test_normalizer_fills_empty_basic_questions_and_next_recs() -> None:
 
 
 def test_generate_passes_skeleton_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", False)
     llm = MagicMock()
     llm.provider = "ollama"
     gen = FeatureTemplateGenerator(llm_service=llm)
@@ -201,7 +202,7 @@ def test_feature_template_cache_key_includes_ultra_fast_settings() -> None:
         feature_request=req,
         rag_references=[],
     )
-    assert "feature-template:skeleton:v3:" in key
+    assert "feature-template:skeleton:v4:" in key
 
 
 def test_skeleton_metadata_serializable() -> None:

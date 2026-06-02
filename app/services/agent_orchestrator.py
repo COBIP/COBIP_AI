@@ -348,34 +348,7 @@ class AgentOrchestrator:
             cached_ft = cache_service.get_json(feature_template_cache_key)
             if isinstance(cached_ft, dict):
                 try:
-                    result = FeatureTemplateGenerateResult(
-                        template=FeatureTemplateData(**(cached_ft.get("template") or {})),
-                        source=str(cached_ft.get("source") or "fallback"),
-                        appliedReferences=list(cached_ft.get("appliedReferences") or []),
-                        generationMode=str(cached_ft.get("generationMode") or "skeleton"),
-                        skeletonFirst=bool(cached_ft.get("skeletonFirst", True)),
-                        deferredSections=list(
-                            cached_ft.get("deferredSections")
-                            or ["codeFiles", "missions", "interviewQuestions"]
-                        ),
-                        fastSkeletonEnabled=bool(
-                            cached_ft.get(
-                                "fastSkeletonEnabled",
-                                settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED,
-                            )
-                        ),
-                        ultraFastSkeletonEnabled=bool(
-                            cached_ft.get(
-                                "ultraFastSkeletonEnabled",
-                                settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED,
-                            )
-                        ),
-                        skeletonMaxTokens=cached_ft.get("skeletonMaxTokens"),
-                        skeletonRagTopK=cached_ft.get("skeletonRagTopK"),
-                        skeletonRagContentMaxChars=cached_ft.get(
-                            "skeletonRagContentMaxChars"
-                        ),
-                    )
+                    result = FeatureTemplateGenerator.deserialize_cache_entry(cached_ft)
                     feature_template_cache_hit = True
                     steps.append("feature_template_cache_hit")
                 except Exception:
@@ -384,22 +357,13 @@ class AgentOrchestrator:
         gen_t0 = time.perf_counter()
         if result is None:
             result = FeatureTemplateGenerator().generate(feature_request)
-            if feature_template_cache_key and result.source != "fallback":
+            if (
+                feature_template_cache_key
+                and FeatureTemplateGenerator.is_cacheable_generate_result(result)
+            ):
                 cache_service.set_json(
                     feature_template_cache_key,
-                    {
-                        "template": result.template.model_dump(),
-                        "source": result.source,
-                        "appliedReferences": result.appliedReferences,
-                        "generationMode": result.generationMode,
-                        "skeletonFirst": result.skeletonFirst,
-                        "deferredSections": result.deferredSections,
-                        "fastSkeletonEnabled": result.fastSkeletonEnabled,
-                        "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
-                        "skeletonMaxTokens": result.skeletonMaxTokens,
-                        "skeletonRagTopK": result.skeletonRagTopK,
-                        "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
-                    },
+                    FeatureTemplateGenerator.serialize_cache_entry(result),
                     settings.FEATURE_TEMPLATE_CACHE_TTL_SECONDS,
                 )
             if feature_template_cache_key and not feature_template_cache_hit:
@@ -449,6 +413,11 @@ class AgentOrchestrator:
             skeletonMaxTokens=result.skeletonMaxTokens,
             skeletonRagTopK=result.skeletonRagTopK or skeleton_rag_top_k,
             skeletonRagContentMaxChars=result.skeletonRagContentMaxChars,
+            instantSkeletonUsed=result.instantSkeletonUsed,
+            qualityBaselineApplied=result.qualityBaselineApplied,
+            initialLlmEnhancementAttempted=result.initialLlmEnhancementAttempted,
+            initialLlmEnhancementSucceeded=result.initialLlmEnhancementSucceeded,
+            initialLlmEnhancementMs=result.initialLlmEnhancementMs,
             ragRetrievalAttempted=retrieval.attempted,
             ragRetrievalStatus=retrieval.status,
             ragRetrievedCount=retrieval.retrieved_count,
@@ -476,14 +445,7 @@ class AgentOrchestrator:
                 "source": result.source,
                 "request": feature_request.model_dump(),
                 "appliedReferences": result.appliedReferences,
-                "generationMode": result.generationMode,
-                "skeletonFirst": result.skeletonFirst,
-                "deferredSections": result.deferredSections,
-                "fastSkeletonEnabled": result.fastSkeletonEnabled,
-                "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
-                "skeletonMaxTokens": result.skeletonMaxTokens,
-                "skeletonRagTopK": result.skeletonRagTopK,
-                "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
+                **FeatureTemplateGenerator.result_metadata_payload(result),
             },
             trace=trace,
         )
@@ -509,9 +471,10 @@ class AgentOrchestrator:
             "skeletonMaxTokens": settings.FEATURE_TEMPLATE_SKELETON_MAX_TOKENS,
             "skeletonRagTopK": settings.FEATURE_TEMPLATE_SKELETON_RAG_TOP_K,
             "skeletonRagContentMaxChars": settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS,
-            "version": "v3",
+            "instantSkeletonEnabled": settings.FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED,
+            "version": "v4",
         }
-        return cache_service.build_hashed_key("feature-template:skeleton:v3", payload)
+        return cache_service.build_hashed_key("feature-template:skeleton:v4", payload)
 
     @staticmethod
     def _classify_agentic_intent_with_reason(

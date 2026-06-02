@@ -38,7 +38,13 @@ def test_generate_endpoint_template_has_all_sections() -> None:
     template = body["data"]["template"]
     assert set(template.keys()) == _CANONICAL_KEYS
     assert body["data"].get("appliedReferences") == []
-    assert body["data"]["generationMode"] in {"skeleton", "fallback"}
+    assert body["data"]["generationMode"] in {
+        "skeleton",
+        "fallback",
+        "quality_instant_skeleton",
+    }
+    assert body["data"]["source"] in {"ollama", "fallback", "instant"}
+    assert body["data"]["instantSkeletonUsed"] is True
     assert body["data"]["skeletonFirst"] is True
     assert body["data"]["deferredSections"] == [
         "codeFiles",

@@ -15,6 +15,7 @@ InterviewQuestionSchema, NextRecommendationSchema)의 정식 인스턴스로 만
 """
 
 import logging
+import time
 from typing import Any
 
 from pydantic import ValidationError
@@ -38,13 +39,19 @@ from app.schemas.feature_template import (
     QuestionSchema,
     RequirementSchema,
 )
+from app.services.feature_template_instant_skeleton import (
+    QUALITY_INSTANT_GENERATION_MODE,
+    build_quality_instant_skeleton_dict,
+)
 from app.services.feature_template_normalizer import FeatureTemplateNormalizer
 from app.services.feature_template_section_resolve import alternate_keys_for_section
 from app.services.llm_service import LLMService
 from app.services.prompt_builder import (
+    build_applied_references_payload,
     build_feature_template_prompt_with_applied_rags,
     build_feature_template_section_prompt,
     get_initial_generation_skeleton_metadata,
+    select_usable_rag_references,
 )
 
 __all__ = ["FeatureTemplateGenerator"]
@@ -94,10 +101,103 @@ class FeatureTemplateGenerator:
         self._llm_service = llm_service or LLMService()
 
     def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateGenerateResult:
-        skeleton_meta = get_initial_generation_skeleton_metadata()
-        prompt, applied_refs, _prompt_meta = build_feature_template_prompt_with_applied_rags(
-            request
+        applied_refs, skeleton_meta = self._resolve_applied_references(request)
+
+        if settings.FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED:
+            return self._generate_quality_instant_skeleton(
+                request,
+                applied_refs=applied_refs,
+                skeleton_meta=skeleton_meta,
+            )
+
+        return self._generate_via_llm(
+            request,
+            applied_refs=applied_refs,
+            skeleton_meta=skeleton_meta,
         )
+
+    def _generate_quality_instant_skeleton(
+        self,
+        request: FeatureTemplateGenerateRequest,
+        *,
+        applied_refs: list[dict[str, Any]],
+        skeleton_meta: dict[str, Any],
+    ) -> FeatureTemplateGenerateResult:
+        enhancement_attempted = False
+        enhancement_succeeded = False
+        enhancement_ms: int | None = None
+
+        try:
+            normalized_dict = build_quality_instant_skeleton_dict(request)
+            template = FeatureTemplateData(**normalized_dict)
+        except (ValidationError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Quality instant skeleton failed; falling back to mock: featureName=%s, error=%s",
+                request.featureName,
+                self._summarize_generation_error(exc),
+            )
+            mock = self._generate_mock_template(request)
+            normalized = FeatureTemplateNormalizer.normalize(mock.model_dump(), request)
+            normalized["codeFiles"] = []
+            normalized["missions"] = []
+            normalized["interviewQuestions"] = []
+            return self._build_generate_result(
+                template=FeatureTemplateData(**normalized),
+                source="fallback",
+                applied_refs=applied_refs,
+                generation_mode="fallback",
+                skeleton_meta=skeleton_meta,
+            )
+
+        if settings.FEATURE_TEMPLATE_INITIAL_LLM_ENHANCEMENT_ENABLED:
+            enhancement_attempted = True
+            t0 = time.perf_counter()
+            try:
+                prompt, _, _ = build_feature_template_prompt_with_applied_rags(request)
+                llm_result = self._llm_service.generate_json(
+                    prompt,
+                    timeout_seconds=settings.FEATURE_TEMPLATE_INITIAL_LLM_TIMEOUT_SECONDS,
+                    max_tokens=skeleton_meta.get("skeletonMaxTokens"),
+                )
+                enhanced = FeatureTemplateNormalizer.normalize(llm_result, request)
+                enhanced["codeFiles"] = []
+                enhanced["missions"] = []
+                enhanced["interviewQuestions"] = []
+                template = FeatureTemplateData(**enhanced)
+                enhancement_succeeded = True
+            except (RuntimeError, ValidationError, TypeError, ValueError) as exc:
+                logger.info(
+                    "Initial LLM enhancement skipped; using instant skeleton: featureName=%s, error=%s",
+                    request.featureName,
+                    self._summarize_generation_error(exc),
+                )
+            enhancement_ms = max(0, int((time.perf_counter() - t0) * 1000))
+
+        logger.info(
+            "Feature template generated via quality instant skeleton: featureName=%s, source=instant",
+            request.featureName,
+        )
+        return self._build_generate_result(
+            template=template,
+            source="instant",
+            applied_refs=applied_refs,
+            generation_mode=QUALITY_INSTANT_GENERATION_MODE,
+            skeleton_meta=skeleton_meta,
+            instant_skeleton_used=True,
+            quality_baseline_applied=True,
+            initial_llm_enhancement_attempted=enhancement_attempted,
+            initial_llm_enhancement_succeeded=enhancement_succeeded,
+            initial_llm_enhancement_ms=enhancement_ms,
+        )
+
+    def _generate_via_llm(
+        self,
+        request: FeatureTemplateGenerateRequest,
+        *,
+        applied_refs: list[dict[str, Any]],
+        skeleton_meta: dict[str, Any],
+    ) -> FeatureTemplateGenerateResult:
+        prompt, _, _ = build_feature_template_prompt_with_applied_rags(request)
         skeleton_max_tokens = skeleton_meta.get("skeletonMaxTokens")
 
         try:
@@ -109,10 +209,6 @@ class FeatureTemplateGenerator:
             normalized_dict = FeatureTemplateNormalizer.normalize(llm_result, request)
             template = FeatureTemplateData(**normalized_dict)
         except (RuntimeError, ValidationError, TypeError, ValueError) as exc:
-            # LLM 호출 실패 / JSON 파싱 실패 / 스키마 검증 실패
-            # → mock fallback 으로 안전하게 떨어진다.
-            # (OLLAMA_BASE_URL 미설정 시 LLMService 가 schema 와 맞지 않는
-            #  mock dict 를 반환하므로 ValidationError 로 진입한다.)
             logger.warning(
                 "Feature template LLM generation failed. "
                 "Falling back to mock template: featureName=%s, errorType=%s, errorSummary=%s",
@@ -145,6 +241,105 @@ class FeatureTemplateGenerator:
         )
 
     @staticmethod
+    def _resolve_applied_references(
+        request: FeatureTemplateGenerateRequest,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        from app.services.prompt_builder import _extract_rag_references_from_reference_context
+
+        skeleton_meta = get_initial_generation_skeleton_metadata()
+        rag_refs = _extract_rag_references_from_reference_context(request.referenceContext)
+        selected = select_usable_rag_references(
+            rag_refs,
+            max_items=skeleton_meta["skeletonRagTopK"],
+        )
+        applied = build_applied_references_payload(selected)
+        return applied, skeleton_meta
+
+    @staticmethod
+    def is_cacheable_generate_result(result: FeatureTemplateGenerateResult) -> bool:
+        if result.source == "fallback":
+            return False
+        if result.source == "instant" and not settings.FEATURE_TEMPLATE_CACHE_INSTANT_SKELETON_ENABLED:
+            return False
+        return True
+
+    @staticmethod
+    def serialize_cache_entry(result: FeatureTemplateGenerateResult) -> dict[str, Any]:
+        return {
+            "template": result.template.model_dump(),
+            "source": result.source,
+            "appliedReferences": result.appliedReferences,
+            "generationMode": result.generationMode,
+            "skeletonFirst": result.skeletonFirst,
+            "deferredSections": result.deferredSections,
+            "fastSkeletonEnabled": result.fastSkeletonEnabled,
+            "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
+            "skeletonMaxTokens": result.skeletonMaxTokens,
+            "skeletonRagTopK": result.skeletonRagTopK,
+            "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
+            "instantSkeletonUsed": result.instantSkeletonUsed,
+            "qualityBaselineApplied": result.qualityBaselineApplied,
+            "initialLlmEnhancementAttempted": result.initialLlmEnhancementAttempted,
+            "initialLlmEnhancementSucceeded": result.initialLlmEnhancementSucceeded,
+            "initialLlmEnhancementMs": result.initialLlmEnhancementMs,
+        }
+
+    @staticmethod
+    def deserialize_cache_entry(cached_ft: dict[str, Any]) -> FeatureTemplateGenerateResult:
+        return FeatureTemplateGenerateResult(
+            template=FeatureTemplateData(**(cached_ft.get("template") or {})),
+            source=str(cached_ft.get("source") or "fallback"),  # type: ignore[arg-type]
+            appliedReferences=list(cached_ft.get("appliedReferences") or []),
+            generationMode=str(cached_ft.get("generationMode") or "skeleton"),  # type: ignore[arg-type]
+            skeletonFirst=bool(cached_ft.get("skeletonFirst", True)),
+            deferredSections=list(
+                cached_ft.get("deferredSections") or _DEFERRED_INITIAL_SECTIONS
+            ),
+            fastSkeletonEnabled=bool(
+                cached_ft.get(
+                    "fastSkeletonEnabled",
+                    settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED,
+                )
+            ),
+            ultraFastSkeletonEnabled=bool(
+                cached_ft.get(
+                    "ultraFastSkeletonEnabled",
+                    settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED,
+                )
+            ),
+            skeletonMaxTokens=cached_ft.get("skeletonMaxTokens"),
+            skeletonRagTopK=cached_ft.get("skeletonRagTopK"),
+            skeletonRagContentMaxChars=cached_ft.get("skeletonRagContentMaxChars"),
+            instantSkeletonUsed=bool(cached_ft.get("instantSkeletonUsed", False)),
+            qualityBaselineApplied=bool(cached_ft.get("qualityBaselineApplied", False)),
+            initialLlmEnhancementAttempted=bool(
+                cached_ft.get("initialLlmEnhancementAttempted", False)
+            ),
+            initialLlmEnhancementSucceeded=bool(
+                cached_ft.get("initialLlmEnhancementSucceeded", False)
+            ),
+            initialLlmEnhancementMs=cached_ft.get("initialLlmEnhancementMs"),
+        )
+
+    @staticmethod
+    def result_metadata_payload(result: FeatureTemplateGenerateResult) -> dict[str, Any]:
+        return {
+            "generationMode": result.generationMode,
+            "skeletonFirst": result.skeletonFirst,
+            "deferredSections": result.deferredSections,
+            "fastSkeletonEnabled": result.fastSkeletonEnabled,
+            "ultraFastSkeletonEnabled": result.ultraFastSkeletonEnabled,
+            "skeletonMaxTokens": result.skeletonMaxTokens,
+            "skeletonRagTopK": result.skeletonRagTopK,
+            "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
+            "instantSkeletonUsed": result.instantSkeletonUsed,
+            "qualityBaselineApplied": result.qualityBaselineApplied,
+            "initialLlmEnhancementAttempted": result.initialLlmEnhancementAttempted,
+            "initialLlmEnhancementSucceeded": result.initialLlmEnhancementSucceeded,
+            "initialLlmEnhancementMs": result.initialLlmEnhancementMs,
+        }
+
+    @staticmethod
     def _build_generate_result(
         *,
         template: FeatureTemplateData,
@@ -152,6 +347,11 @@ class FeatureTemplateGenerator:
         applied_refs: list[dict[str, Any]],
         generation_mode: str,
         skeleton_meta: dict[str, Any],
+        instant_skeleton_used: bool = False,
+        quality_baseline_applied: bool = False,
+        initial_llm_enhancement_attempted: bool = False,
+        initial_llm_enhancement_succeeded: bool = False,
+        initial_llm_enhancement_ms: int | None = None,
     ) -> FeatureTemplateGenerateResult:
         return FeatureTemplateGenerateResult(
             template=template,
@@ -165,6 +365,11 @@ class FeatureTemplateGenerator:
             skeletonMaxTokens=skeleton_meta.get("skeletonMaxTokens"),
             skeletonRagTopK=skeleton_meta.get("skeletonRagTopK"),
             skeletonRagContentMaxChars=skeleton_meta.get("skeletonRagContentMaxChars"),
+            instantSkeletonUsed=instant_skeleton_used,
+            qualityBaselineApplied=quality_baseline_applied,
+            initialLlmEnhancementAttempted=initial_llm_enhancement_attempted,
+            initialLlmEnhancementSucceeded=initial_llm_enhancement_succeeded,
+            initialLlmEnhancementMs=initial_llm_enhancement_ms,
         )
 
     def regenerate_section(
