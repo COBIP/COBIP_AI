@@ -40,8 +40,12 @@ from app.schemas.feature_template import (
     RequirementSchema,
 )
 from app.services.feature_template_instant_skeleton import (
+    QUALITY_INSTANT_FULL_GENERATION_MODE,
     QUALITY_INSTANT_GENERATION_MODE,
     build_quality_instant_skeleton_dict,
+    compute_instant_deferred_sections,
+    instant_full_baseline_applied,
+    resolve_instant_generation_mode,
 )
 from app.services.feature_template_normalizer import FeatureTemplateNormalizer
 from app.services.feature_template_section_resolve import alternate_keys_for_section
@@ -130,6 +134,9 @@ class FeatureTemplateGenerator:
         try:
             normalized_dict = build_quality_instant_skeleton_dict(request)
             template = FeatureTemplateData(**normalized_dict)
+            generation_mode = resolve_instant_generation_mode(request)
+            instant_full = instant_full_baseline_applied(request)
+            deferred_sections = compute_instant_deferred_sections(request, normalized_dict)
         except (ValidationError, TypeError, ValueError) as exc:
             logger.warning(
                 "Quality instant skeleton failed; falling back to mock: featureName=%s, error=%s",
@@ -181,10 +188,12 @@ class FeatureTemplateGenerator:
             template=template,
             source="instant",
             applied_refs=applied_refs,
-            generation_mode=QUALITY_INSTANT_GENERATION_MODE,
+            generation_mode=generation_mode,
             skeleton_meta=skeleton_meta,
             instant_skeleton_used=True,
             quality_baseline_applied=True,
+            instant_full_baseline_applied=instant_full,
+            deferred_sections=deferred_sections,
             initial_llm_enhancement_attempted=enhancement_attempted,
             initial_llm_enhancement_succeeded=enhancement_succeeded,
             initial_llm_enhancement_ms=enhancement_ms,
@@ -279,6 +288,7 @@ class FeatureTemplateGenerator:
             "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
             "instantSkeletonUsed": result.instantSkeletonUsed,
             "qualityBaselineApplied": result.qualityBaselineApplied,
+            "instantFullBaselineApplied": result.instantFullBaselineApplied,
             "initialLlmEnhancementAttempted": result.initialLlmEnhancementAttempted,
             "initialLlmEnhancementSucceeded": result.initialLlmEnhancementSucceeded,
             "initialLlmEnhancementMs": result.initialLlmEnhancementMs,
@@ -292,8 +302,10 @@ class FeatureTemplateGenerator:
             appliedReferences=list(cached_ft.get("appliedReferences") or []),
             generationMode=str(cached_ft.get("generationMode") or "skeleton"),  # type: ignore[arg-type]
             skeletonFirst=bool(cached_ft.get("skeletonFirst", True)),
-            deferredSections=list(
-                cached_ft.get("deferredSections") or _DEFERRED_INITIAL_SECTIONS
+            deferredSections=(
+                list(cached_ft.get("deferredSections") or [])
+                if "deferredSections" in cached_ft
+                else list(_DEFERRED_INITIAL_SECTIONS)
             ),
             fastSkeletonEnabled=bool(
                 cached_ft.get(
@@ -312,6 +324,7 @@ class FeatureTemplateGenerator:
             skeletonRagContentMaxChars=cached_ft.get("skeletonRagContentMaxChars"),
             instantSkeletonUsed=bool(cached_ft.get("instantSkeletonUsed", False)),
             qualityBaselineApplied=bool(cached_ft.get("qualityBaselineApplied", False)),
+            instantFullBaselineApplied=bool(cached_ft.get("instantFullBaselineApplied", False)),
             initialLlmEnhancementAttempted=bool(
                 cached_ft.get("initialLlmEnhancementAttempted", False)
             ),
@@ -334,6 +347,7 @@ class FeatureTemplateGenerator:
             "skeletonRagContentMaxChars": result.skeletonRagContentMaxChars,
             "instantSkeletonUsed": result.instantSkeletonUsed,
             "qualityBaselineApplied": result.qualityBaselineApplied,
+            "instantFullBaselineApplied": result.instantFullBaselineApplied,
             "initialLlmEnhancementAttempted": result.initialLlmEnhancementAttempted,
             "initialLlmEnhancementSucceeded": result.initialLlmEnhancementSucceeded,
             "initialLlmEnhancementMs": result.initialLlmEnhancementMs,
@@ -349,9 +363,11 @@ class FeatureTemplateGenerator:
         skeleton_meta: dict[str, Any],
         instant_skeleton_used: bool = False,
         quality_baseline_applied: bool = False,
+        instant_full_baseline_applied: bool = False,
         initial_llm_enhancement_attempted: bool = False,
         initial_llm_enhancement_succeeded: bool = False,
         initial_llm_enhancement_ms: int | None = None,
+        deferred_sections: list[str] | None = None,
     ) -> FeatureTemplateGenerateResult:
         return FeatureTemplateGenerateResult(
             template=template,
@@ -359,7 +375,11 @@ class FeatureTemplateGenerator:
             appliedReferences=applied_refs,
             generationMode=generation_mode,  # type: ignore[arg-type]
             skeletonFirst=True,
-            deferredSections=list(_DEFERRED_INITIAL_SECTIONS),
+            deferredSections=(
+                list(_DEFERRED_INITIAL_SECTIONS)
+                if deferred_sections is None
+                else list(deferred_sections)
+            ),
             fastSkeletonEnabled=bool(skeleton_meta.get("fastSkeletonEnabled")),
             ultraFastSkeletonEnabled=bool(skeleton_meta.get("ultraFastSkeletonEnabled")),
             skeletonMaxTokens=skeleton_meta.get("skeletonMaxTokens"),
@@ -367,6 +387,7 @@ class FeatureTemplateGenerator:
             skeletonRagContentMaxChars=skeleton_meta.get("skeletonRagContentMaxChars"),
             instantSkeletonUsed=instant_skeleton_used,
             qualityBaselineApplied=quality_baseline_applied,
+            instantFullBaselineApplied=instant_full_baseline_applied,
             initialLlmEnhancementAttempted=initial_llm_enhancement_attempted,
             initialLlmEnhancementSucceeded=initial_llm_enhancement_succeeded,
             initialLlmEnhancementMs=initial_llm_enhancement_ms,

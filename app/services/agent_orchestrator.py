@@ -418,6 +418,7 @@ class AgentOrchestrator:
             initialLlmEnhancementAttempted=result.initialLlmEnhancementAttempted,
             initialLlmEnhancementSucceeded=result.initialLlmEnhancementSucceeded,
             initialLlmEnhancementMs=result.initialLlmEnhancementMs,
+            instantFullBaselineApplied=result.instantFullBaselineApplied,
             ragRetrievalAttempted=retrieval.attempted,
             ragRetrievalStatus=retrieval.status,
             ragRetrievedCount=retrieval.retrieved_count,
@@ -472,9 +473,10 @@ class AgentOrchestrator:
             "skeletonRagTopK": settings.FEATURE_TEMPLATE_SKELETON_RAG_TOP_K,
             "skeletonRagContentMaxChars": settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS,
             "instantSkeletonEnabled": settings.FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED,
-            "version": "v4",
+            "instantFullBaseline": True,
+            "version": "v5",
         }
-        return cache_service.build_hashed_key("feature-template:skeleton:v4", payload)
+        return cache_service.build_hashed_key("feature-template:instant-full:v5", payload)
 
     @staticmethod
     def _classify_agentic_intent_with_reason(

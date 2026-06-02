@@ -14,6 +14,7 @@ from app.services.agent_orchestrator import AgentOrchestrator
 from app.services.cache_service import CacheService
 from app.services.feature_template_generator import FeatureTemplateGenerator
 from app.services.feature_template_instant_skeleton import (
+    QUALITY_INSTANT_FULL_GENERATION_MODE,
     QUALITY_INSTANT_GENERATION_MODE,
     build_quality_instant_skeleton_dict,
 )
@@ -58,7 +59,9 @@ def test_instant_skeleton_enabled_skips_llm(monkeypatch: pytest.MonkeyPatch) -> 
     llm = MagicMock()
     llm.generate_json.side_effect = AssertionError("LLM must not be called")
     gen = FeatureTemplateGenerator(llm_service=llm)
-    result = gen.generate(_login_request(includeCode=False))
+    result = gen.generate(
+        _login_request(includeCode=False, includeMissions=False, includeInterview=False)
+    )
     assert result.source == "instant"
     assert result.generationMode == QUALITY_INSTANT_GENERATION_MODE
     llm.generate_json.assert_not_called()
@@ -81,9 +84,9 @@ def test_instant_skeleton_fills_quality_sections() -> None:
     assert len(normalized["apiSpec"]) >= 1
     assert len(normalized["basicQuestions"]) >= 3
     assert len(normalized["nextRecommendations"]) >= 3
-    assert normalized["codeFiles"] == []
-    assert normalized["missions"] == []
-    assert normalized["interviewQuestions"] == []
+    assert len(normalized["codeFiles"]) >= 4
+    assert len(normalized["missions"]) >= 2
+    assert len(normalized["interviewQuestions"]) >= 3
     _assert_no_weak_placeholders(normalized)
 
 
@@ -105,12 +108,14 @@ def test_login_instant_skeleton_minimum_counts() -> None:
     assert len(normalized["nextRecommendations"]) >= 3
 
 
-def test_deferred_sections_empty_on_initial_generate() -> None:
+def test_deferred_sections_empty_when_full_baseline_filled() -> None:
     result = FeatureTemplateGenerator().generate(_login_request())
     data = result.template.model_dump()
-    assert data["codeFiles"] == []
-    assert data["missions"] == []
-    assert data["interviewQuestions"] == []
+    assert len(data["codeFiles"]) >= 4
+    assert len(data["missions"]) >= 2
+    assert len(data["interviewQuestions"]) >= 3
+    assert result.deferredSections == []
+    assert result.generationMode == QUALITY_INSTANT_FULL_GENERATION_MODE
 
 
 def test_agentic_rag_path_uses_instant_skeleton(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,11 +197,13 @@ def test_rag_failure_still_returns_instant_success(monkeypatch: pytest.MonkeyPat
 
 
 def test_instant_metadata_fields() -> None:
-    result = FeatureTemplateGenerator().generate(_login_request(includeCode=False))
+    result = FeatureTemplateGenerator().generate(
+        _login_request(includeCode=False, includeMissions=False, includeInterview=False)
+    )
     assert result.instantSkeletonUsed is True
     assert result.qualityBaselineApplied is True
     assert result.skeletonFirst is True
-    assert result.deferredSections == ["codeFiles", "missions", "interviewQuestions"]
+    assert result.deferredSections == []
     assert result.generationMode == QUALITY_INSTANT_GENERATION_MODE
     assert result.initialLlmEnhancementAttempted is False
 

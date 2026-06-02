@@ -141,6 +141,10 @@ class AgenticRagTrace(BaseModel):
         default=False,
         description="22차: deterministic quality baseline 적용 여부",
     )
+    instantFullBaselineApplied: bool = Field(
+        default=False,
+        description="23차: instant full baseline(code/mission/interview) 적용 여부",
+    )
     initialLlmEnhancementAttempted: bool = Field(
         default=False,
         description="22차: optional LLM enhancement 시도 여부",
