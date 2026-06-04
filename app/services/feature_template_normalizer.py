@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from typing import Any
@@ -11,6 +12,8 @@ from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
 __all__ = [
     "FeatureTemplateNormalizer",
+    "build_generic_api_spec_template",
+    "get_login_api_spec_template",
     "normalize_feature_template_payload",
 ]
 
@@ -506,30 +509,381 @@ def _is_generic_endpoint(value: object) -> bool:
 
 
 def _login_api_spec_template() -> dict[str, Any]:
+    request_body = {
+        "email": "user@example.com",
+        "password": "Passw0rd!",
+    }
+    response_body = {
+        "success": True,
+        "message": "로그인 성공",
+        "data": {
+            "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.token",
+            "tokenType": "Bearer",
+            "user": {
+                "userId": 1,
+                "email": "user@example.com",
+                "nickname": "코비",
+            },
+        },
+    }
+    request_fields = [
+        {
+            "name": "email",
+            "type": "string",
+            "required": True,
+            "description": "등록된 사용자 이메일 (@Email Bean Validation 적용)",
+            "example": "user@example.com",
+        },
+        {
+            "name": "password",
+            "type": "string",
+            "required": True,
+            "description": "8자 이상 비밀번호 (@NotBlank, @Size(min=8) 적용)",
+            "example": "Passw0rd!",
+        },
+    ]
+    response_fields = [
+        {
+            "name": "success",
+            "type": "boolean",
+            "required": True,
+            "description": "API 처리 성공 여부",
+            "example": True,
+        },
+        {
+            "name": "message",
+            "type": "string",
+            "required": True,
+            "description": "결과 메시지",
+            "example": "로그인 성공",
+        },
+        {
+            "name": "data.accessToken",
+            "type": "string",
+            "required": True,
+            "description": "JWT 액세스 토큰 (후속 API Authorization 헤더에 사용)",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.token",
+        },
+        {
+            "name": "data.tokenType",
+            "type": "string",
+            "required": True,
+            "description": "토큰 타입 (Bearer)",
+            "example": "Bearer",
+        },
+        {
+            "name": "data.user.userId",
+            "type": "long",
+            "required": True,
+            "description": "사용자 식별자",
+            "example": 1,
+        },
+        {
+            "name": "data.user.email",
+            "type": "string",
+            "required": True,
+            "description": "로그인한 사용자 이메일",
+            "example": "user@example.com",
+        },
+        {
+            "name": "data.user.nickname",
+            "type": "string",
+            "required": True,
+            "description": "화면 표시용 닉네임",
+            "example": "코비",
+        },
+    ]
+    status_codes = [
+        {
+            "code": 200,
+            "description": "로그인 성공",
+            "when": "email·password 검증 및 JWT accessToken 발급 성공",
+        },
+        {
+            "code": 400,
+            "description": "입력값 오류",
+            "when": "email 형식 오류, password 누락, Bean Validation 실패",
+        },
+        {
+            "code": 401,
+            "description": "인증 실패",
+            "when": "존재하지 않는 계정 또는 비밀번호 불일치",
+        },
+    ]
+    error_responses = [
+        {
+            "status": 400,
+            "code": "VALIDATION_ERROR",
+            "message": "입력값이 올바르지 않습니다.",
+            "example": {
+                "success": False,
+                "message": "email must be a well-formed email address",
+                "data": None,
+            },
+        },
+        {
+            "status": 401,
+            "code": "INVALID_CREDENTIALS",
+            "message": "이메일 또는 비밀번호가 올바르지 않습니다.",
+            "example": {
+                "success": False,
+                "message": "INVALID_CREDENTIALS",
+                "data": None,
+            },
+        },
+    ]
+    frontend_notes = [
+        "로그인 성공 시 data.accessToken을 secure storage 정책에 맞게 저장한다.",
+        "후속 API 호출 시 Authorization: Bearer {accessToken} 헤더를 추가한다.",
+        "401 응답 시 로그인 화면으로 이동하고 입력 필드를 초기화한다.",
+        "400 응답은 필드별 validation 메시지를 폼에 매핑해 표시한다.",
+    ]
+    description = (
+        "이메일과 비밀번호를 입력받아 사용자를 인증하고 JWT accessToken을 발급하는 로그인 API입니다.\n\n"
+        "인증 필요 여부: Bearer Token 불필요 (공개 엔드포인트)\n"
+        "Request Headers: Content-Type: application/json\n\n"
+        "상태 코드:\n"
+        "- 200: 로그인 성공 — accessToken·tokenType·user 정보 반환\n"
+        "- 400: 입력값 오류 — email 형식 오류 또는 password 누락\n"
+        "- 401: 인증 실패 — 계정 없음 또는 비밀번호 불일치\n\n"
+        "프론트 연동 참고:\n"
+        "- 성공 시 accessToken 저장 후 Authorization: Bearer {token}으로 후속 API 호출\n"
+        "- 401 시 로그인 화면 리다이렉트, 400 시 필드 오류 메시지 표시"
+    )
     return {
         "apiName": "로그인 API",
         "method": "POST",
         "endpoint": "/api/auth/login",
-        "description": "이메일과 비밀번호를 입력받아 인증 후 JWT accessToken을 발급한다.",
-        "requestBody": {
-            "email": "string",
-            "password": "string",
+        "description": description,
+        "authenticationRequired": False,
+        "requestHeaders": [
+            {
+                "name": "Content-Type",
+                "required": True,
+                "value": "application/json",
+                "description": "JSON 요청 본문",
+            },
+            {
+                "name": "Accept",
+                "required": False,
+                "value": "application/json",
+                "description": "JSON 응답 선호",
+            },
+        ],
+        "requestFields": request_fields,
+        "responseFields": response_fields,
+        "requestBody": request_body,
+        "responseBody": response_body,
+        "status": 200,
+        "statusCodes": status_codes,
+        "errorResponses": error_responses,
+        "frontendNotes": frontend_notes,
+    }
+
+
+def get_login_api_spec_template() -> dict[str, Any]:
+    """로그인 instant baseline / normalizer / fallback 공용 API 명세 템플릿."""
+
+    return copy.deepcopy(_login_api_spec_template())
+
+
+def build_generic_api_spec_template(
+    *,
+    api_name: str,
+    method: str,
+    endpoint: str,
+) -> dict[str, Any]:
+    """로그인 외 기능 instant baseline용 API 명세 템플릿."""
+
+    success_status = 201 if method.upper() == "POST" else 200
+    request_body = {
+        "title": "샘플 제목",
+        "content": "샘플 내용",
+    }
+    response_body = {
+        "success": True,
+        "message": f"{api_name} 처리 성공",
+        "data": {
+            "id": 1,
+            "message": "처리 완료",
         },
-        "responseBody": {
-            "success": True,
-            "message": "로그인 성공",
-            "data": {
-                "accessToken": "string",
-                "tokenType": "Bearer",
-                "user": {
-                    "userId": "long",
-                    "email": "string",
-                    "nickname": "string",
+    }
+    description = (
+        f"{api_name} 요청을 처리하는 REST API입니다.\n\n"
+        f"인증 필요 여부: Bearer Token 필요 (Authorization: Bearer {'{token}'})\n"
+        f"Request Headers: Content-Type: application/json\n\n"
+        f"상태 코드:\n"
+        f"- {success_status}: 처리 성공\n"
+        f"- 400: 입력값 오류\n"
+        f"- 401: 인증 필요 또는 토큰 만료\n"
+        f"- 409: 비즈니스 규칙 충돌\n\n"
+        "프론트 연동 참고:\n"
+        "- Authorization 헤더에 accessToken을 포함한다.\n"
+        "- 400/409 응답 message를 사용자에게 표시한다."
+    )
+    return {
+        "apiName": api_name,
+        "method": method,
+        "endpoint": endpoint,
+        "description": description,
+        "authenticationRequired": True,
+        "requestHeaders": [
+            {
+                "name": "Content-Type",
+                "required": True,
+                "value": "application/json",
+                "description": "JSON 요청 본문",
+            },
+            {
+                "name": "Authorization",
+                "required": True,
+                "value": "Bearer {accessToken}",
+                "description": "로그인 후 발급받은 JWT",
+            },
+        ],
+        "requestFields": [
+            {
+                "name": "title",
+                "type": "string",
+                "required": True,
+                "description": "요청 제목 또는 식별용 문자열",
+                "example": "샘플 제목",
+            },
+            {
+                "name": "content",
+                "type": "string",
+                "required": True,
+                "description": "요청 본문 또는 상세 내용",
+                "example": "샘플 내용",
+            },
+        ],
+        "responseFields": [
+            {
+                "name": "success",
+                "type": "boolean",
+                "required": True,
+                "description": "처리 성공 여부",
+                "example": True,
+            },
+            {
+                "name": "message",
+                "type": "string",
+                "required": True,
+                "description": "결과 메시지",
+                "example": f"{api_name} 처리 성공",
+            },
+            {
+                "name": "data.id",
+                "type": "long",
+                "required": True,
+                "description": "생성·처리된 리소스 ID",
+                "example": 1,
+            },
+        ],
+        "requestBody": request_body,
+        "responseBody": response_body,
+        "status": success_status,
+        "statusCodes": [
+            {
+                "code": success_status,
+                "description": "처리 성공",
+                "when": "입력 검증 및 비즈니스 처리 성공",
+            },
+            {
+                "code": 400,
+                "description": "입력값 오류",
+                "when": "필수 필드 누락 또는 형식 오류",
+            },
+            {
+                "code": 401,
+                "description": "인증 실패",
+                "when": "토큰 누락·만료·위조",
+            },
+            {
+                "code": 409,
+                "description": "비즈니스 충돌",
+                "when": "중복 데이터 또는 규칙 위반",
+            },
+        ],
+        "errorResponses": [
+            {
+                "status": 400,
+                "code": "VALIDATION_ERROR",
+                "message": "입력값이 올바르지 않습니다.",
+                "example": {
+                    "success": False,
+                    "message": "title must not be blank",
+                    "data": None,
                 },
             },
-        },
-        "status": 200,
+            {
+                "status": 401,
+                "code": "UNAUTHORIZED",
+                "message": "인증이 필요합니다.",
+                "example": {
+                    "success": False,
+                    "message": "UNAUTHORIZED",
+                    "data": None,
+                },
+            },
+        ],
+        "frontendNotes": [
+            "API 호출 전 accessToken 유효성을 확인한다.",
+            "성공 응답 data.id를 화면 상태 또는 후속 API path variable에 반영한다.",
+            "오류 응답 message를 toast/alert로 사용자에게 전달한다.",
+        ],
     }
+
+
+_API_SPEC_DOCUMENTATION_KEYS: tuple[str, ...] = (
+    "authenticationRequired",
+    "requestHeaders",
+    "requestFields",
+    "responseFields",
+    "statusCodes",
+    "errorResponses",
+    "frontendNotes",
+)
+
+
+def _is_missing_api_spec_documentation(item: dict[str, Any]) -> bool:
+    for key in _API_SPEC_DOCUMENTATION_KEYS:
+        value = item.get(key)
+        if key == "authenticationRequired":
+            continue
+        if value in (None, [], {}):
+            return True
+    return False
+
+
+def _apply_api_spec_documentation_defaults(
+    item: dict[str, Any],
+    template: dict[str, Any],
+    *,
+    index: int,
+    changed_fields: list[str],
+) -> None:
+    prefix = f"apiSpec[{index}]"
+    desc = _coerce_to_string(item.get("description")).strip()
+    template_desc = _coerce_to_string(template.get("description")).strip()
+    if (
+        _is_missing_or_blank_str(item.get("description"))
+        or len(desc) < len(template_desc) // 2
+    ):
+        item["description"] = template_desc
+        changed_fields.append(f"{prefix}.description")
+    if "authenticationRequired" not in item:
+        item["authenticationRequired"] = template.get("authenticationRequired", False)
+        changed_fields.append(f"{prefix}.authenticationRequired")
+    for key in _API_SPEC_DOCUMENTATION_KEYS:
+        if key == "authenticationRequired":
+            continue
+        value = item.get(key)
+        if value in (None, [], {}):
+            template_value = template.get(key)
+            if template_value is not None:
+                item[key] = copy.deepcopy(template_value)
+                changed_fields.append(f"{prefix}.{key}")
 
 
 def _default_login_purpose() -> str:
@@ -854,11 +1208,17 @@ def _ensure_login_quality_baseline(
                 item["requestBody"] = dict(login_api["requestBody"])
                 changed_fields.append(f"apiSpec[{index}].requestBody")
             if _is_poor_api_response_body(item.get("responseBody")):
-                item["responseBody"] = dict(login_api["responseBody"])
+                item["responseBody"] = copy.deepcopy(login_api["responseBody"])
                 changed_fields.append(f"apiSpec[{index}].responseBody")
             if item.get("status") in (None, "", 0):
                 item["status"] = 200
                 changed_fields.append(f"apiSpec[{index}].status")
+            _apply_api_spec_documentation_defaults(
+                item,
+                login_api,
+                index=index,
+                changed_fields=changed_fields,
+            )
             fixed_specs.append(item)
         normalized["apiSpec"] = fixed_specs or [dict(login_api)]
 

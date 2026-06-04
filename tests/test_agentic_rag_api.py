@@ -237,3 +237,43 @@ def test_agentic_rag_routes_chat(monkeypatch) -> None:
     assert body["data"]["resultType"] == "chat"
     assert body["data"]["result"]["answer"] == "안녕하세요."
     assert body["data"]["trace"]["handler"] == "AgentOrchestrator.run_chat"
+
+
+def test_agentic_rag_login_api_spec_includes_enriched_documentation(
+    monkeypatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", True)
+    monkeypatch.setattr(settings, "RAG_ENABLED", False)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_CACHE_ENABLED", False)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/ai/agentic-rag/run",
+        json={
+            "message": "Spring Boot 로그인 기능템플릿 생성해줘",
+            "featureTemplate": {
+                "language": "Java",
+                "framework": "Spring Boot",
+                "featureName": "로그인",
+                "level": "beginner",
+                "includeCode": True,
+                "includeMissions": True,
+                "includeInterview": True,
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["result"]["source"] == "instant"
+    assert body["data"]["result"]["generationMode"] == "quality_instant_full"
+    assert body["data"]["trace"]["fallbackUsed"] is False
+
+    api = body["data"]["result"]["template"]["apiSpec"][0]
+    assert api["endpoint"] == "/api/auth/login"
+    assert len(api["requestFields"]) >= 2
+    assert len(api["statusCodes"]) >= 3
+    assert len(api["errorResponses"]) >= 2
+    assert len(api["frontendNotes"]) >= 2

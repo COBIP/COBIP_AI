@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.main import app
 from app.models.enums import DifficultyLevel
-from app.schemas.feature_template import FeatureTemplateGenerateRequest
+from app.schemas.feature_template import FeatureTemplateGenerateRequest, FeatureTemplateData
 from app.services.agent_orchestrator import AgentOrchestrator
 from app.services.cache_service import CacheService
 from app.services.feature_template_generator import FeatureTemplateGenerator
@@ -99,6 +99,25 @@ def test_login_instant_skeleton_uses_auth_login_endpoint() -> None:
     assert "email" in str(login_api["requestBody"]).lower() or "password" in str(
         login_api["requestBody"]
     ).lower() or "username" in str(login_api["requestBody"]).lower()
+
+
+def test_login_instant_skeleton_api_spec_includes_documentation_fields() -> None:
+    normalized = build_quality_instant_skeleton_dict(_login_request())
+    login_api = next(
+        item for item in normalized["apiSpec"] if item["endpoint"] == "/api/auth/login"
+    )
+    assert login_api["authenticationRequired"] is False
+    assert len(login_api["requestHeaders"]) >= 1
+    assert len(login_api["requestFields"]) >= 2
+    assert len(login_api["responseFields"]) >= 5
+    assert len(login_api["statusCodes"]) >= 3
+    assert len(login_api["errorResponses"]) >= 2
+    assert len(login_api["frontendNotes"]) >= 2
+    assert len(login_api["description"]) >= 120
+    assert "401" in login_api["description"]
+    assert login_api["requestBody"]["email"]
+    assert login_api["responseBody"]["data"]["accessToken"]
+    FeatureTemplateData(**normalized)
 
 
 def test_login_instant_skeleton_minimum_counts() -> None:

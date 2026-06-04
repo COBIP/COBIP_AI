@@ -691,10 +691,13 @@ def test_login_api_endpoint_and_body_are_normalized(sample_request: FeatureTempl
     assert api["endpoint"] == "/api/auth/login"
     assert "email" in api["requestBody"]
     assert "password" in api["requestBody"]
-    # 11차 정책은 responseBody에 success/message/data 래퍼를 사용한다.
-    assert api["responseBody"]["data"]["accessToken"] == "string"
+    # enriched baseline uses concrete success example values
+    assert api["responseBody"]["data"]["accessToken"]
     assert api["responseBody"]["data"]["tokenType"] == "Bearer"
     assert "user" in api["responseBody"]["data"]
+    assert len(api.get("requestFields", [])) >= 2
+    assert len(api.get("statusCodes", [])) >= 3
+    assert api.get("authenticationRequired") is False
     assert out["codeFiles"] == []
     assert out["missions"] == []
     assert out["interviewQuestions"] == []
@@ -827,7 +830,9 @@ def test_login_api_name_path_replaced_with_korean(
     assert api["endpoint"] == "/api/auth/login"
     assert "email" in api["requestBody"]
     assert "password" in api["requestBody"]
-    assert api["responseBody"]["data"]["accessToken"] == "string"
+    assert api["responseBody"]["data"]["accessToken"]
+    assert len(api.get("errorResponses", [])) >= 2
+    assert len(api.get("frontendNotes", [])) >= 2
     FeatureTemplateData(**out)
 
 
@@ -932,6 +937,22 @@ def test_login_next_recommendations_dedupe_space_variants_and_resort(
     assert [item["priority"] for item in out["nextRecommendations"]] == list(
         range(1, len(out["nextRecommendations"]) + 1)
     )
+    FeatureTemplateData(**out)
+
+
+def test_login_api_spec_documentation_fields_are_filled_from_empty_seed(
+    sample_request: FeatureTemplateGenerateRequest,
+) -> None:
+    out = FeatureTemplateNormalizer.normalize({}, sample_request)
+    api = out["apiSpec"][0]
+    assert api["endpoint"] == "/api/auth/login"
+    assert api["authenticationRequired"] is False
+    assert len(api["requestFields"]) >= 2
+    assert len(api["responseFields"]) >= 5
+    assert len(api["statusCodes"]) >= 3
+    assert len(api["errorResponses"]) >= 2
+    assert len(api["frontendNotes"]) >= 2
+    assert "Bearer Token 불필요" in api["description"]
     FeatureTemplateData(**out)
 
 
