@@ -13,6 +13,10 @@ __all__ = [
     "LayerRoleSchema",
     "FlowSchema",
     "ApiSpecSchema",
+    "ApiSpecFieldSchema",
+    "ApiSpecHeaderSchema",
+    "ApiSpecStatusCodeSchema",
+    "ApiSpecErrorResponseSchema",
     "CodeFileSchema",
     "QuestionSchema",
     "MissionSchema",
@@ -123,6 +127,42 @@ class FlowSchema(BaseModel):
     layers: list[LayerRoleSchema]
 
 
+class ApiSpecFieldSchema(BaseModel):
+    """API 명세 request/response 필드 정의."""
+
+    name: str
+    type: str
+    required: bool = True
+    description: str = ""
+    example: str | int | float | bool | None = None
+
+
+class ApiSpecHeaderSchema(BaseModel):
+    """API 명세 요청 헤더 정의."""
+
+    name: str
+    required: bool = True
+    value: str | None = None
+    description: str = ""
+
+
+class ApiSpecStatusCodeSchema(BaseModel):
+    """HTTP 상태 코드 설명."""
+
+    code: int
+    description: str
+    when: str | None = None
+
+
+class ApiSpecErrorResponseSchema(BaseModel):
+    """실패 응답 예시."""
+
+    status: int
+    code: str | None = None
+    message: str
+    example: dict[str, Any] | None = None
+
+
 class ApiSpecSchema(BaseModel):
     apiName: str
     method: str
@@ -131,6 +171,34 @@ class ApiSpecSchema(BaseModel):
     requestBody: dict | str
     responseBody: dict | str
     status: int
+    authenticationRequired: bool = Field(
+        default=False,
+        description="Bearer 등 인증 헤더 필요 여부",
+    )
+    requestHeaders: list[ApiSpecHeaderSchema] = Field(
+        default_factory=list,
+        description="요청 헤더 명세",
+    )
+    requestFields: list[ApiSpecFieldSchema] = Field(
+        default_factory=list,
+        description="요청 본문 필드 명세",
+    )
+    responseFields: list[ApiSpecFieldSchema] = Field(
+        default_factory=list,
+        description="응답 본문 필드 명세",
+    )
+    statusCodes: list[ApiSpecStatusCodeSchema] = Field(
+        default_factory=list,
+        description="가능한 HTTP 상태 코드 목록",
+    )
+    errorResponses: list[ApiSpecErrorResponseSchema] = Field(
+        default_factory=list,
+        description="실패 응답 예시 목록",
+    )
+    frontendNotes: list[str] = Field(
+        default_factory=list,
+        description="프론트엔드 연동 참고사항",
+    )
 
 
 class CodeFileSchema(BaseModel):

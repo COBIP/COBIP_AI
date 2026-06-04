@@ -47,7 +47,10 @@ from app.services.feature_template_instant_skeleton import (
     instant_full_baseline_applied,
     resolve_instant_generation_mode,
 )
-from app.services.feature_template_normalizer import FeatureTemplateNormalizer
+from app.services.feature_template_normalizer import (
+    FeatureTemplateNormalizer,
+    get_login_api_spec_template,
+)
 from app.services.feature_template_section_resolve import alternate_keys_for_section
 from app.services.llm_service import LLMService
 from app.services.prompt_builder import (
@@ -680,32 +683,7 @@ class FeatureTemplateGenerator:
             ],
         )
 
-        api_spec = [
-            ApiSpecSchema(
-                apiName="로그인",
-                method="POST",
-                endpoint="/api/auth/login",
-                description="아이디/비밀번호로 로그인하고 인증 토큰을 발급한다.",
-                requestBody={
-                    "username": "string",
-                    "password": "string",
-                },
-                responseBody={
-                    "success": True,
-                    "message": "로그인 성공",
-                    "data": {
-                        "accessToken": "string(JWT)",
-                        "tokenType": "Bearer",
-                        "user": {
-                            "userId": "long",
-                            "username": "string",
-                            "nickname": "string",
-                        },
-                    },
-                },
-                status=200,
-            ),
-        ]
+        api_spec = [ApiSpecSchema(**get_login_api_spec_template())]
 
         code_files: list[CodeFileSchema] = []
         if request.includeCode:

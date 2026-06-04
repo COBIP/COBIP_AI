@@ -7,7 +7,10 @@ from typing import Any
 
 from app.models.enums import DifficultyLevel, QuestionType
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
-from app.services.feature_template_normalizer import FeatureTemplateNormalizer
+from app.services.feature_template_normalizer import (
+    FeatureTemplateNormalizer,
+    build_generic_api_spec_template,
+)
 
 __all__ = [
     "QUALITY_INSTANT_GENERATION_MODE",
@@ -636,18 +639,11 @@ def _generic_api_spec(
     endpoint: str,
 ) -> list[dict[str, Any]]:
     return [
-        {
-            "apiName": api_name,
-            "method": method,
-            "endpoint": endpoint,
-            "description": f"{api_name} 처리 엔드포인트",
-            "requestBody": {"title": "string", "content": "string"},
-            "responseBody": {
-                "success": True,
-                "data": {"id": "long", "message": "string"},
-            },
-            "status": 201 if method == "POST" else 200,
-        }
+        build_generic_api_spec_template(
+            api_name=api_name,
+            method=method,
+            endpoint=endpoint,
+        )
     ]
 
 
