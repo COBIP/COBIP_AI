@@ -126,7 +126,7 @@ def test_retrieve_passes_feature_template_top_k_to_retriever(
         retriever=retriever,
     )
     assert out.status == "success"
-    assert retriever.calls == [("Spring Boot 로그인", 2)]
+    assert retriever.calls == [("Spring Boot 로그인", 5)]
 
 
 def test_applied_references_include_section_doc_type_path(

@@ -415,22 +415,88 @@ def _scrub_login_endpoint_placeholders_in_payload(
                 item[list_field] = fixed_list
 
 
+def _is_java_request(request: FeatureTemplateGenerateRequest | None) -> bool:
+    if request is None:
+        return False
+    return (request.language or "").lower() == "java"
+
+
 def _infer_java_code_file_role(file_name: str) -> str | None:
     bn = _basename_java_filename(file_name)
     role_map: tuple[tuple[str, str], ...] = (
+        ("Repository.java", "데이터 접근 Repository"),
+        ("DAO.java", "데이터 접근 DAO"),
+        ("Dao.java", "데이터 접근 DAO"),
+        ("Provider.java", "인증/토큰 Provider"),
         ("Controller.java", "REST API 컨트롤러"),
         ("Service.java", "비즈니스 로직 서비스"),
+        ("CreateRequest.java", "요청 DTO"),
+        ("UpdateRequest.java", "요청 DTO"),
         ("Request.java", "요청 DTO"),
         ("Response.java", "응답 DTO"),
-        ("Repository.java", "데이터 접근 Repository"),
         ("Entity.java", "JPA Entity"),
+        ("Dto.java", "DTO"),
+        ("DTO.java", "DTO"),
         ("Config.java", "설정 클래스"),
         ("Filter.java", "인증/인가 필터"),
+        ("Utils.java", "유틸리티"),
+        ("Util.java", "유틸리티"),
+        ("Exception.java", "예외 클래스"),
     )
     for suffix, role in role_map:
         if bn.endswith(suffix):
             return role
+    if re.match(r"^[A-Z][A-Za-z0-9]*\.java$", bn):
+        return "JPA Entity"
     return None
+
+
+_WRONG_GENERIC_DATA_ACCESS_ROLE = "데이터 접근"
+
+
+def _normalize_java_code_file_roles(
+    files: list[dict[str, Any]],
+    changed_fields: list[str],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for index, raw in enumerate(files):
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        fn = str(item.get("fileName", "") or "")
+        inferred = _infer_java_code_file_role(fn)
+        current = item.get("role")
+        current_s = current.strip() if isinstance(current, str) else ""
+        if inferred:
+            if current_s != inferred:
+                item["role"] = inferred
+                changed_fields.append(f"codeFiles[{index}].role")
+        elif current_s == _WRONG_GENERIC_DATA_ACCESS_ROLE:
+            changed_fields.append(f"codeFiles[{index}].role[ambiguous-data-access]")
+        out.append(item)
+    return out
+
+
+def _apply_java_codefiles_role_guard(
+    normalized: dict[str, Any],
+    request: FeatureTemplateGenerateRequest | None,
+    changed_fields: list[str],
+) -> None:
+    """Java codeFiles 파일명 기반 role 범용 보정."""
+
+    if request is None or not _is_java_request(request) or not request.includeCode:
+        return
+    files = normalized.get("codeFiles")
+    if not isinstance(files, list):
+        return
+    normalized["codeFiles"] = _normalize_java_code_file_roles(files, changed_fields)
+
+
+def _normalize_login_code_file_roles(
+    files: list[dict[str, Any]],
+    changed_fields: list[str],
+) -> list[dict[str, Any]]:
+    return _normalize_java_code_file_roles(files, changed_fields)
 
 
 def _normalize_java_package_in_content(content: str, package: str) -> str:
@@ -2597,6 +2663,7 @@ def normalize_feature_template_payload(
         normalized[section] = normalized_items
 
     _apply_post_normalize_quality(normalized, request, changed_fields)
+    _apply_java_codefiles_role_guard(normalized, request, changed_fields)
     _apply_spring_boot_login_quality_guard(normalized, request, changed_fields)
     _ensure_final_login_defense(normalized, request, changed_fields)
 

@@ -386,6 +386,8 @@ class FeatureTemplateGenerator:
         retrieval = retrieve_feature_template_rag_references(
             query=query,
             top_k=rag_top_k,
+            feature_name=request.featureName,
+            framework=request.framework,
         )
         merged_refs = merge_manual_and_auto_rag_references(
             manual_refs,

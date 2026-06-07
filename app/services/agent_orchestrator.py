@@ -295,6 +295,8 @@ class AgentOrchestrator:
             query=retrieval_query,
             top_k=skeleton_rag_top_k,
             cache_service=cache_service,
+            feature_name=feature_request.featureName,
+            framework=feature_request.framework,
         )
         rag_retrieval_ms = max(0, int((time.perf_counter() - rag_t0) * 1000))
         if retrieval.status == "success":
