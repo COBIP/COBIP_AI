@@ -190,7 +190,7 @@ def _extract_applied_reference_metadata(raw: dict[str, Any]) -> dict[str, Any]:
 
     meta = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
     out: dict[str, Any] = {}
-    for key in ("section", "docType", "path", "fileName"):
+    for key in ("section", "docType", "path", "fileName", "category", "framework", "featureName"):
         val = raw.get(key) if key in raw else meta.get(key)
         if isinstance(val, str) and val.strip():
             out[key] = val.strip()

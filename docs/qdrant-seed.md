@@ -1,10 +1,18 @@
-# Qdrant 지식 데이터 Seed (Agentic RAG 14차)
+# Qdrant 지식 데이터 Seed (Agentic RAG 14차 + 기능템플릿 RAG 원본)
 
-`POST /ai/agentic-rag/run`의 `feature_template_generate` 경로가 13차부터 Qdrant 검색 결과를 자동으로 `referenceContext.ragReferences`에 주입합니다(자세한 정책은 [agentic-rag-unified-api.md](./agentic-rag-unified-api.md#기능템플릿-qdrant-자동-rag-주입-정책-13차) 참고). 14차에서는 그 동작을 실제로 확인할 수 있도록 **Spring Boot 로그인 기능 기준 초기 지식 문서**를 Qdrant에 적재할 수 있는 seed 스크립트를 추가했습니다.
+`POST /ai/agentic-rag/run` 및 `POST /ai/feature-template/generate`의 `quality_llm_full` 경로는 Qdrant 검색 결과를 `[RAG Context]`로 Ollama 프롬프트에 주입합니다. 검색 대상 지식은 **Git 원본 문서**와 **legacy inline seed** 두 종류를 upsert할 수 있습니다.
+
+## 문서 원본 vs Qdrant DB
+
+| 역할 | 위치 | 설명 |
+| --- | --- | --- |
+| **원본 (Git)** | `docs/rag/feature-template/*.md` | COBIP 표준 지식. 버전 관리·리뷰·수정용 |
+| **검색 DB** | Qdrant `cobip_knowledge` | embedding 후 vector search. generate는 **파일 직접 읽기 없이** Qdrant hit만 사용 |
+| **seed bridge** | `scripts/seed_qdrant_feature_template_docs.py` | md 원본 → embedding → Qdrant upsert |
 
 ## 목적
 
-- 자동 RAG 주입 검증용 **최소 지식 코퍼스**(로그인 요구사항/API/DTO/계층/BCrypt/JWT/에러/regenerate-section/skeleton-first) 9건을 안전하게 적재한다.
+- 자동 RAG 주입 검증용 **COBIP 기능템플릿 표준 문서** 5건 + legacy 로그인 inline seed 9건을 안전하게 적재한다.
 - 운영 RAG_ENABLED 토글을 켜기 전, dry-run으로 문서·payload·deterministic id를 사전 점검한다.
 - 기존 collection을 절대 drop / recreate 하지 않는다. 없을 때만 Cosine 거리 collection을 새로 만든다.
 
@@ -19,6 +27,30 @@
 | graceful 실패 | embedding/upsert 실패는 호출자에 raise하지 않고 `{ "ok": false, "reason": ... }` 으로 보고. |
 
 ## Seed 문서 구성
+
+### A) COBIP 기능템플릿 RAG 원본 (`docs/rag/feature-template/`)
+
+| 파일 | title (요약) |
+| --- | --- |
+| spring-boot-login-standard.md | Spring Boot 로그인 기능템플릿 표준 |
+| spring-boot-auth-jwt-bcrypt.md | JWT · BCrypt 보안 표준 |
+| cobip-feature-template-section-rules.md | 9개 섹션 작성 규칙 |
+| cobip-api-spec-rules.md | apiSpec 확장 필드 규칙 |
+| feature-template-quality-anti-patterns.md | 품질 anti-pattern 금지 규칙 |
+
+Qdrant payload 키 (문서당):
+
+```
+title, content, contentPreview,
+source="cobip_feature_template_standard",
+category="feature_template",
+framework="Spring Boot", featureName="로그인",
+docType="feature_template_standard", section, path, tags[]
+```
+
+point id: `uuid.uuid5(FEATURE_TEMPLATE_SEED_NAMESPACE, relative_md_path)` — 재실행 시 중복 증가 없음.
+
+### B) Legacy inline seed (`scripts/seed_qdrant_login_knowledge.py`)
 
 `scripts/seed_qdrant_login_knowledge.py::build_login_seed_documents()`가 다음 9건을 반환합니다.
 
@@ -48,7 +80,17 @@ path, tags[]
 
 ## 사용 방법
 
-### 1) dry-run (외부 서비스 호출 없음 — 기본 동작)
+### 0) 기능템플릿 RAG 원본 seed (권장)
+
+```bash
+# dry-run (기본)
+python scripts/seed_qdrant_feature_template_docs.py --dry-run --json
+
+# 실제 upsert
+python scripts/seed_qdrant_feature_template_docs.py --apply --collection cobip_knowledge
+```
+
+### 1) dry-run (legacy login seed — 외부 서비스 호출 없음)
 
 ```bash
 # 사람이 읽기 좋은 출력
@@ -65,13 +107,16 @@ python scripts/seed_qdrant_login_knowledge.py --dry-run --json
 - 각 문서에 deterministic UUIDv5 id, payload key 리스트, content preview가 표시됨
 - Qdrant/embedding 모델 import가 일어나지 않음 (네트워크·모델 로드 부담 없음)
 
-### 2) 실제 upsert (사용자가 명시한 경우에만)
+### 2) 실제 upsert (legacy login seed)
 
-> **운영 안전:** RAG_ENABLED를 켜기 전에 항상 dry-run을 먼저 돌려 문서 목록과 id가 의도대로 나오는지 확인할 것. 기존 collection이 이미 있으면 그대로 사용되며, 동일 id에 대해서는 Qdrant가 upsert로 안전하게 덮어씁니다.
+> **운영 안전:** RAG_ENABLED를 켜기 전에 항상 dry-run을 먼저 돌려 문서 목록과 id가 의도대로 나오는지 확인할 것.
 
 ```bash
 # 기본 collection (settings.QDRANT_COLLECTION) 사용
 python scripts/seed_qdrant_login_knowledge.py --apply
+
+# 기능템플릿 md 원본 + legacy login seed 한 번에
+python scripts/seed_qdrant_login_knowledge.py --apply --include-feature-template-docs
 
 # collection 명시
 python scripts/seed_qdrant_login_knowledge.py --apply --collection cobip_knowledge
@@ -110,15 +155,44 @@ python scripts/seed_qdrant_login_knowledge.py --apply --json
    ```
 3. **seed dry-run으로 문서/id 사전 점검**
    ```bash
+   python scripts/seed_qdrant_feature_template_docs.py --dry-run --json
    python scripts/seed_qdrant_login_knowledge.py --dry-run --json
    ```
 4. **seed 실제 upsert (사용자 명시 필요)**
    ```bash
-   python scripts/seed_qdrant_login_knowledge.py --apply
+   python scripts/seed_qdrant_feature_template_docs.py --apply
+   # 또는 legacy + md 원본 동시
+   python scripts/seed_qdrant_login_knowledge.py --apply --include-feature-template-docs
    ```
 5. **`RAG_ENABLED=true` 적용 후 ai-server 프로세스 재기동**
    - 환경변수 반영을 위해 ai-server 프로세스를 재기동해야 합니다(`pydantic-settings`가 시작 시 한 번 로드).
    - 운영 docker 재기동/배포는 본 14차 작업 범위가 아닙니다. 운영자가 별도 절차로 수행하세요.
+
+## `/ai/feature-template/generate` RAG 검증
+
+```bash
+curl -s -X POST http://<ai-server>/ai/feature-template/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "Java",
+    "framework": "Spring Boot",
+    "featureName": "로그인",
+    "level": "beginner",
+    "includeCode": true,
+    "includeMissions": true,
+    "includeInterview": true
+  }' | python -m json.tool
+```
+
+기대값:
+
+| 필드 | 기대 |
+| --- | --- |
+| `success` | `true` |
+| `data.source` | `ollama` |
+| `data.generationMode` | `quality_llm_full` |
+| `data.fallbackUsed` | `false` |
+| `data.appliedReferences` | 길이 ≥ 1, `usedInPrompt=true`, `source=cobip_feature_template_standard` |
 
 ## 자동 RAG 주입 검증 (`/ai/agentic-rag/run`)
 
