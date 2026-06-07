@@ -243,10 +243,14 @@ def test_agentic_rag_login_api_spec_includes_enriched_documentation(
     monkeypatch,
 ) -> None:
     from app.core.config import settings
+    from tests.test_feature_template_llm_full_first import _full_llm_payload
 
-    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", True)
     monkeypatch.setattr(settings, "RAG_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_CACHE_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.feature_template_generator.LLMService.generate_json",
+        lambda *_a, **_k: _full_llm_payload(),
+    )
 
     client = TestClient(app)
     resp = client.post(
@@ -267,8 +271,8 @@ def test_agentic_rag_login_api_spec_includes_enriched_documentation(
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["data"]["result"]["source"] == "instant"
-    assert body["data"]["result"]["generationMode"] == "quality_instant_full"
+    assert body["data"]["result"]["source"] == "ollama"
+    assert body["data"]["result"]["generationMode"] == "quality_llm_full"
     assert body["data"]["trace"]["fallbackUsed"] is False
 
     api = body["data"]["result"]["template"]["apiSpec"][0]

@@ -400,7 +400,7 @@ class AgentOrchestrator:
             ragContextAvailable=rag_ctx_available,
             ragReferenceCount=rag_ref_count,
             appliedReferenceCount=applied_count,
-            fallbackUsed=source == "fallback",
+            fallbackUsed=result.fallbackUsed,
             source=source,
             resultType="feature_template",
             routeDecision=route_decision,

@@ -50,16 +50,19 @@ class Settings(BaseSettings):
     FEATURE_TEMPLATE_CACHE_ENABLED: bool = False
     FEATURE_TEMPLATE_CACHE_TTL_SECONDS: int = 3600
 
+    # Agentic RAG 24차: LLM full-first (GPU Ollama + RAG 전체 생성, instant는 fallback 전용)
+    FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED: bool = True
+
     # Agentic RAG 17차: 최초 generate fast skeleton (짧은 초안, uncached 속도 개선)
-    FEATURE_TEMPLATE_FAST_SKELETON_ENABLED: bool = True
+    FEATURE_TEMPLATE_FAST_SKELETON_ENABLED: bool = False
 
     # Agentic RAG 18차: ultra-fast skeleton (LLM 생성 범위 최소화, normalizer 보정)
-    FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED: bool = True
+    FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED: bool = False
     FEATURE_TEMPLATE_SKELETON_RAG_TOP_K: int = 2
     FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS: int = 300
     FEATURE_TEMPLATE_SKELETON_MAX_TOKENS: int = 800
 
-    # Agentic RAG 22차: quality instant skeleton (LLM 대기 없이 deterministic baseline)
+    # Agentic RAG 22차: quality instant skeleton (LLM 실패 시 fallback 전용)
     FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED: bool = True
     FEATURE_TEMPLATE_INITIAL_LLM_ENHANCEMENT_ENABLED: bool = False
     FEATURE_TEMPLATE_INITIAL_LLM_TIMEOUT_SECONDS: int = 8

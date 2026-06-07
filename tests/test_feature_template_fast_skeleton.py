@@ -1,5 +1,7 @@
 """17차 fast skeleton 프로필 검증."""
 
+import pytest
+
 from app.core.config import settings
 from app.models.enums import DifficultyLevel
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
@@ -25,13 +27,20 @@ def _req(**kwargs: object) -> FeatureTemplateGenerateRequest:
     return FeatureTemplateGenerateRequest(**base)
 
 
+@pytest.fixture(autouse=True)
+def _disable_llm_full_for_fast_skeleton_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED", False)
+
+
 def test_fast_skeleton_enabled_by_default(monkeypatch) -> None:
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     assert is_fast_skeleton_enabled_for_initial_generate() is True
 
 
 def test_fast_skeleton_prompt_shorter_than_legacy(monkeypatch) -> None:
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     fast_text = build_feature_template_prompt(_req())
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", False)
     legacy_text = build_feature_template_prompt(_req())
