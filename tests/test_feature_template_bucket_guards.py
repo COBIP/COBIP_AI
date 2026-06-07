@@ -561,6 +561,8 @@ class TestJwtBucketGuard:
         assert "/api/auth/login" in endpoints
         assert "/api/users/me" in endpoints
 
+
+class TestGenericBucketGuard:
     def test_unknown_feature_gets_baseline(self) -> None:
         raw = {
             "overview": {
