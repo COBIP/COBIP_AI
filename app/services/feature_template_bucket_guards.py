@@ -83,6 +83,63 @@ def _basename(name: str) -> str:
     return s
 
 
+_JAVA_CLASS_FILE_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9_]*\.java$")
+
+
+def _is_valid_java_codefile_name(file_name: str) -> bool:
+    """Java Spring Boot codeFiles fileName 규칙 검사."""
+
+    bn = _basename(file_name)
+    if not bn.endswith(".java"):
+        return False
+    low = bn.lower()
+    if ".py" in low:
+        return False
+    if low.startswith("module_") and ".py" in low:
+        return False
+    return bool(_JAVA_CLASS_FILE_PATTERN.match(bn))
+
+
+def _java_codefile_path_matches_filename(item: dict[str, Any]) -> bool:
+    fn = _basename(str(item.get("fileName", "") or ""))
+    fp = str(item.get("filePath") or "").replace("\\", "/")
+    if not fp.strip():
+        return True
+    return fp.endswith(f"/{fn}") or fp.endswith(fn)
+
+
+def _java_codefile_class_matches_filename(item: dict[str, Any]) -> bool:
+    fn = _basename(str(item.get("fileName", "") or ""))
+    if not fn.endswith(".java"):
+        return True
+    class_name = fn[:-5]
+    content = str(item.get("content", "") or "")
+    if not content.strip():
+        return True
+    declared = _extract_public_class(content)
+    if declared is None:
+        return True
+    return declared == class_name
+
+
+def _should_drop_java_codefile(raw: dict[str, Any], drop_patterns: tuple[str, ...]) -> bool:
+    """비정상 fileName·경로·public class 불일치·bucket 무관 LLM 찌꺼기 제거."""
+
+    bn = _basename(str(raw.get("fileName", "") or ""))
+    if not bn:
+        return True
+    if not _is_valid_java_codefile_name(bn):
+        return True
+    if any(p.lower() in bn.lower() for p in drop_patterns):
+        return True
+    if not _java_codefile_path_matches_filename(raw):
+        return True
+    content = str(raw.get("content", "") or "")
+    if content.strip() and not _java_codefile_class_matches_filename(raw):
+        return True
+    return False
+
+
 def _extract_public_class(content: str) -> str | None:
     m = re.search(r"\b(?:class|record|interface)\s+(\w+)", content)
     return m.group(1) if m else None
@@ -241,7 +298,48 @@ _CRUD_FORBIDDEN = (
     "username",
     "password",
 )
-_JWT_FORBIDDEN = ("JWTController",)
+_JWT_FORBIDDEN = ("JWTController", "AppController")
+_JWT_FORBIDDEN_API_ENDPOINTS = ("/api/auth/signup",)
+
+
+def _sanitize_jwt_api_spec(normalized: dict[str, Any], changed_fields: list[str]) -> None:
+    """jwt_auth bucket apiSpec: login + /users/me만 유지, signup endpoint 제거."""
+
+    canon = _default_jwt_api_spec()
+    items = normalized.get("apiSpec")
+    if not isinstance(items, list):
+        items = []
+
+    kept: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ep = str(item.get("endpoint", "") or "").strip()
+        ep_low = ep.lower()
+        if any(f in ep_low for f in _JWT_FORBIDDEN_API_ENDPOINTS) or "signup" in ep_low:
+            changed_fields.append(f"apiSpec[jwt-drop].{ep or 'unknown'}")
+            continue
+        kept.append(item)
+
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in kept:
+        method = str(item.get("method", "GET") or "GET").upper()
+        ep = str(item.get("endpoint", "") or "").strip()
+        if ep:
+            by_key[(method, ep)] = item
+
+    result: list[dict[str, Any]] = []
+    for canon_item in canon:
+        key = (canon_item["method"], canon_item["endpoint"])
+        if key in by_key:
+            result.append(by_key[key])
+        else:
+            result.append(dict(canon_item))
+            changed_fields.append(f"apiSpec[jwt+].{canon_item['endpoint']}")
+
+    if result != items:
+        changed_fields.append("apiSpec[jwt-canonical]")
+    normalized["apiSpec"] = result
 
 
 def _canonical_signup_codefiles() -> dict[str, dict[str, Any]]:
@@ -1183,6 +1281,7 @@ def _merge_required_codefiles(
     default_pkg: str,
     changed_fields: list[str],
     drop_patterns: tuple[str, ...] = (),
+    canonical_only: bool = False,
 ) -> None:
     from app.services.feature_template_normalizer import (
         _infer_java_code_file_role,
@@ -1199,8 +1298,9 @@ def _merge_required_codefiles(
             continue
         bn = _basename(str(raw.get("fileName", "")))
         if not bn.endswith(".java"):
+            changed_fields.append(f"codeFiles[drop-non-java].{bn or 'unknown'}")
             continue
-        if any(p.lower() in bn.lower() for p in drop_patterns):
+        if _should_drop_java_codefile(raw, drop_patterns):
             changed_fields.append(f"codeFiles[drop].{bn}")
             continue
         pkg = _extract_package(str(raw.get("content", ""))) or default_pkg
@@ -1220,14 +1320,14 @@ def _merge_required_codefiles(
             changed_fields.append(f"codeFiles[bucket~].{req}")
 
     out: list[dict[str, Any]] = []
-    seen: set[str] = set()
     for req in required_order:
-        if req in merged:
-            out.append(merged[req])
-            seen.add(req)
-    for k in sorted(merged.keys()):
-        if k not in seen:
-            out.append(merged[k])
+        out.append(merged[req])
+
+    if not canonical_only:
+        seen = set(required_order)
+        for k in sorted(merged.keys()):
+            if k not in seen:
+                out.append(merged[k])
 
     for index, item in enumerate(out):
         fn = str(item.get("fileName", ""))
@@ -1314,6 +1414,7 @@ def _apply_signup_guard(
             default_pkg=_AUTH_PKG,
             changed_fields=changed_fields,
             drop_patterns=("AppController", "AppService", "LoginController"),
+            canonical_only=True,
         )
     if request.includeMissions is False:
         pass
@@ -1406,6 +1507,7 @@ def _apply_crud_guard(
             default_pkg=_POST_PKG,
             changed_fields=changed_fields,
             drop_patterns=("CRUDController", "CRUDService", "AppController", "LoginController"),
+            canonical_only=True,
         )
 
 
@@ -1417,6 +1519,7 @@ def _apply_jwt_guard(
     _ensure_list_section(normalized, "requirements", _default_jwt_requirements, 4, changed_fields)
     _ensure_flow(normalized, _default_jwt_flow, changed_fields)
     _ensure_list_section(normalized, "apiSpec", _default_jwt_api_spec, 2, changed_fields)
+    _sanitize_jwt_api_spec(normalized, changed_fields)
     bq = normalized.get("basicQuestions")
     if not isinstance(bq, list) or len(bq) < 3:
         normalized["basicQuestions"] = [
@@ -1460,7 +1563,8 @@ def _apply_jwt_guard(
             canonical=canon,
             default_pkg=_SECURITY_PKG,
             changed_fields=changed_fields,
-            drop_patterns=("JWTController",),
+            drop_patterns=("JWTController", "AppController"),
+            canonical_only=True,
         )
 
 
@@ -1600,6 +1704,7 @@ _BUCKET_PROMPTS: dict[str, str] = {
         "반드시 JwtTokenProvider, JwtAuthenticationFilter, SecurityConfig, CustomUserDetailsService, "
         "AuthController, LoginRequest, LoginResponse를 분리하세요.\n"
         "AuthController는 POST /api/auth/login endpoint를 제공하고, 보호 API 예시는 GET /api/users/me 입니다.\n"
+        "POST /api/auth/signup endpoint는 jwt_auth bucket에 포함하지 마세요.\n"
         "fileName, filePath, public class명을 일치시키세요."
     ),
     "generic": (
