@@ -54,19 +54,13 @@ _JWT_AUTH_BUCKETS = frozenset({"jwt_auth", "jwt 인증", "jwt인증", "jwt authe
 def classify_feature_template_bucket(feature_name: str | None) -> str | None:
     """요청/문서 featureName을 검색·rerank용 bucket으로 분류."""
 
+    from app.services.feature_template_bucket_guards import detect_feature_template_bucket
+
     raw = (feature_name or "").strip()
     if not raw:
         return None
-    fn = raw.lower()
-    if fn in _LOGIN_BUCKETS or raw in ("로그인", "Login"):
-        return "login"
-    if fn in _SIGNUP_BUCKETS or "회원가입" in raw or "signup" in fn:
-        return "signup"
-    if fn in _CRUD_BUCKETS or "crud" in fn or "게시글" in raw:
-        return "crud"
-    if "jwt" in fn or raw in ("JWT 인증", "JWT인증"):
-        return "jwt_auth"
-    return fn
+    bucket = detect_feature_template_bucket(feature_name)
+    return bucket if bucket != "generic" else raw.lower()
 
 
 def _feature_specific_query_tokens(bucket: str | None) -> list[str]:
