@@ -181,6 +181,90 @@ class TestSignupBucketGuard:
             assert f.get("filePath")
             assert f["filePath"].endswith(f["fileName"])
 
+    def test_signup_strips_login_and_users_me_from_api_spec(self) -> None:
+        """운영 flaky 재현: LLM이 login/users/me endpoint를 섞어도 signup만 유지."""
+
+        raw = {
+            "overview": {
+                "featureName": "회원가입",
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [],
+                "learningGoals": [],
+            },
+            "requirements": [],
+            "flow": {"steps": [], "layers": []},
+            "apiSpec": [
+                {
+                    "apiName": "회원가입",
+                    "method": "POST",
+                    "endpoint": "/api/auth/signup",
+                    "requestBody": {"email": "a@b.com", "password": "pw", "nickname": "n"},
+                    "responseBody": {"userId": 1},
+                    "status": 201,
+                },
+                {
+                    "apiName": "로그인",
+                    "method": "POST",
+                    "endpoint": "/api/auth/login",
+                    "requestBody": {"email": "a@b.com", "password": "pw"},
+                    "responseBody": {"accessToken": "jwt"},
+                    "status": 200,
+                },
+                {
+                    "apiName": "내 정보",
+                    "method": "GET",
+                    "endpoint": "/api/users/me",
+                    "requestHeaders": {"Authorization": "Bearer token"},
+                    "responseBody": {"email": "a@b.com"},
+                    "status": 200,
+                },
+            ],
+            "codeFiles": _bad_app_login_codefiles()
+            + [
+                {
+                    "fileName": "module_0.py.java",
+                    "filePath": "src/main/java/com/example/auth/module_0.py.java",
+                    "role": "데이터 접근",
+                    "language": "java",
+                    "content": "public class module_0 {}",
+                }
+            ],
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+        out = FeatureTemplateNormalizer.normalize(
+            raw, _req("회원가입", includeMissions=False, includeInterview=False)
+        )
+        FeatureTemplateData(**out)
+
+        methods = {
+            (str(s.get("method", "")).upper(), s.get("endpoint", ""))
+            for s in out.get("apiSpec", [])
+            if isinstance(s, dict)
+        }
+        names = {f["fileName"] for f in out["codeFiles"]}
+        blob = str(out)
+        assert len(out["apiSpec"]) == 1
+        assert methods == {("POST", "/api/auth/signup")}
+        assert "/api/auth/login" not in blob
+        assert "/api/users/me" not in blob
+        assert "AppController" not in blob
+        assert "module_" not in blob
+        for req in (
+            "SignupController.java",
+            "SignupService.java",
+            "SignupRequest.java",
+            "SignupResponse.java",
+            "User.java",
+            "UserRepository.java",
+        ):
+            assert req in names
+        _assert_api_spec_schema_fields(out["apiSpec"])
+
 
 class TestCrudBucketGuard:
     def test_crud_bad_llm_output_corrected(self) -> None:
@@ -285,8 +369,52 @@ class TestCrudBucketGuard:
         assert endpoints.count("/api/posts") >= 1
         assert len(endpoints) >= 5
 
+    def test_crud_strips_auth_endpoints_and_validates(self) -> None:
+        raw = {
+            "overview": {
+                "featureName": "게시글 CRUD",
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [],
+                "learningGoals": [],
+            },
+            "requirements": [],
+            "flow": {"steps": [], "layers": []},
+            "apiSpec": [
+                {"method": "POST", "endpoint": "/api/posts"},
+                {"method": "GET", "endpoint": "/api/posts"},
+                {"method": "GET", "endpoint": "/api/posts/{postId}"},
+                {"method": "PUT", "endpoint": "/api/posts/{postId}"},
+                {"method": "DELETE", "endpoint": "/api/posts/{postId}"},
+                {"method": "POST", "endpoint": "/api/auth/login"},
+                {"method": "POST", "endpoint": "/api/auth/signup"},
+                {"method": "GET", "endpoint": "/api/users/me"},
+            ],
+            "codeFiles": _crud_canonical_codefiles(),
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+        out = FeatureTemplateNormalizer.normalize(
+            raw, _req("게시글 CRUD", includeMissions=False, includeInterview=False)
+        )
+        FeatureTemplateData(**out)
 
-class TestJwtBucketGuard:
+        methods = {
+            (str(s.get("method", "")).upper(), s.get("endpoint", ""))
+            for s in out.get("apiSpec", [])
+            if isinstance(s, dict)
+        }
+        blob = str(out)
+        assert len(out["apiSpec"]) == 5
+        assert ("/api/auth/login" not in blob) and ("/api/auth/signup" not in blob)
+        assert ("/api/users/me" not in blob)
+        assert ("POST", "/api/posts") in methods
+        assert ("DELETE", "/api/posts/{postId}") in methods
+        _assert_api_spec_schema_fields(out["apiSpec"])
+
     def test_jwt_mismatched_files_corrected(self) -> None:
         raw = {
             "overview": {
@@ -560,6 +688,95 @@ class TestJwtBucketGuard:
             assert req in names
         assert "/api/auth/login" in endpoints
         assert "/api/users/me" in endpoints
+        _assert_api_spec_schema_fields(out["apiSpec"])
+
+
+def _assert_api_spec_schema_fields(api_spec: list) -> None:
+    for item in api_spec:
+        assert isinstance(item, dict)
+        assert item.get("description")
+        assert item.get("requestBody") is not None
+        assert item.get("responseBody") is not None
+        headers = item.get("requestHeaders")
+        assert isinstance(headers, list)
+        for header in headers:
+            assert isinstance(header, dict)
+            assert header.get("name")
+
+
+class TestBucketApiSpecInvariants:
+    @pytest.mark.parametrize(
+        "feature,kwargs",
+        [
+            ("회원가입", {"includeMissions": False, "includeInterview": False}),
+            ("게시글 CRUD", {"includeMissions": False, "includeInterview": False}),
+            (
+                "JWT 인증",
+                {
+                    "level": DifficultyLevel.INTERMEDIATE,
+                    "includeMissions": False,
+                    "includeInterview": False,
+                },
+            ),
+            ("댓글 작성", {"includeMissions": False, "includeInterview": False}),
+        ],
+    )
+    def test_all_buckets_api_spec_schema_and_codefile_invariants(
+        self, feature: str, kwargs: dict
+    ) -> None:
+        raw = {
+            "overview": {
+                "featureName": feature,
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [],
+                "learningGoals": [],
+            },
+            "requirements": [],
+            "flow": {"steps": [], "layers": []},
+            "apiSpec": [
+                {"method": "POST", "endpoint": "/api/auth/login"},
+                {"method": "POST", "endpoint": "/api/auth/signup"},
+                {"method": "GET", "endpoint": "/api/users/me"},
+                {"method": "POST", "endpoint": "/api/posts"},
+            ],
+            "codeFiles": [
+                {
+                    "fileName": "module_0.py.java",
+                    "filePath": "src/main/java/com/example/app/module_0.py.java",
+                    "role": "데이터 접근",
+                    "language": "java",
+                    "content": "public class module_0 {}",
+                },
+                {
+                    "fileName": "AppController.java",
+                    "filePath": "src/main/java/com/example/app/AppController.java",
+                    "role": "REST API 컨트롤러",
+                    "language": "java",
+                    "content": "public class AppController {}",
+                },
+            ],
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+        out = FeatureTemplateNormalizer.normalize(raw, _req(feature, **kwargs))
+        FeatureTemplateData(**out)
+        _assert_api_spec_schema_fields(out["apiSpec"])
+        for f in out["codeFiles"]:
+            fn = f["fileName"]
+            assert ".py.java" not in fn
+            assert not fn.startswith("module_")
+            assert fn.endswith(".java")
+            assert f["filePath"].endswith(fn)
+            cls = fn[:-5]
+            assert f"class {cls}" in f["content"] or f"interface {cls}" in f["content"]
+        blob = str(out)
+        assert "AppController" not in blob
+        assert "JWTController" not in blob
+        assert "CRUDController" not in blob
 
 
 class TestGenericBucketGuard:
