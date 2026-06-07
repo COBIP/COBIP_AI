@@ -10,6 +10,7 @@ LLM 을 챗봇처럼 자유 응답시키지 않고, 백엔드 내부 JSON 생성
 __all__ = [
     "FEATURE_TEMPLATE_FAST_SKELETON_SUPPLEMENT",
     "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT",
+    "FEATURE_TEMPLATE_LLM_FULL_SUPPLEMENT",
     "FEATURE_TEMPLATE_SYSTEM_PROMPT",
     "FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE",
     "FEATURE_TEMPLATE_RAG_CONTEXT_INSTRUCTIONS",
@@ -35,8 +36,23 @@ FEATURE_TEMPLATE_SYSTEM_PROMPT = """\
 - 모든 필드명은 camelCase이다. 스키마에 없는 필드명(goal/hints/keywords/title/nextFeatureName 단독 key 등)은 추가하지 않는다.
 - requirements[].priority는 문자열("HIGH", "MEDIUM", "LOW"), apiSpec[].status는 정수, flow.steps는 문자열 배열이다.
 - placeholder, TODO, 생략, 점 세 개, "실제 동작 가능한 코드 문자열" 같은 더미·준비용 문구를 쓰지 않는다.
-- 최초 generate는 skeleton-first 전략이다. 기본 구조만 빠르게 만들고 상세 코드·미션·면접 답변은 regenerate-section으로 보완한다.
+- 최초 generate 기본 전략은 LLM full-first다. include 플래그가 true인 섹션은 한 번에 상세 생성한다.
 """
+
+FEATURE_TEMPLATE_LLM_FULL_SUPPLEMENT = """\
+[LLM full-first 생성 모드]
+- 최초 generate는 9개 섹션을 한 번에 상세 생성한다. skeleton-only·stub·빈 배열 우회는 금지한다.
+- overview: featureName·purpose·useCases·resultDescription·techStack·learningGoals를 실무형으로 채운다.
+- requirements: 최소 3개 이상. 입력·검증·성공/실패·보안 관점을 나눈다.
+- flow: steps 5개 이상, layers에 Controller/Service/Repository/DB 및 필요 시 외부 연동.
+- apiSpec: 최소 1개. requestBody·responseBody는 필드 예시가 있는 JSON 객체, status는 정수.
+- basicQuestions: 최소 3개. type을 섞어 흐름 이해 문제로 구성.
+- nextRecommendations: 최소 3개. featureName·reason·expectedLearning·priority(정수).
+- includeCode=true이면 codeFiles: fileName·filePath·role·language·content를 실제 동작 가능한 예시로 최소 4개.
+- includeMissions=true이면 missions: 최소 2개. description 앞 "미션 목표:" 한 줄, requirements·successCriteria 포함.
+- includeInterview=true이면 interviewQuestions: 최소 3개. keyPoints·sampleAnswer 포함.
+- includeCode/includeMissions/includeInterview=false인 섹션은 반드시 []만 반환한다.
+- RAG context가 있으면 requirements·apiSpec·flow·codeFiles에 우선 반영한다."""
 
 FEATURE_TEMPLATE_FAST_SKELETON_SUPPLEMENT = """\
 [fast skeleton 초안 모드]

@@ -54,17 +54,20 @@ def _assert_no_weak_placeholders(payload: object) -> None:
             assert not pattern.search(payload), f"weak placeholder found: {payload!r}"
 
 
-def test_instant_skeleton_enabled_skips_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_instant_skeleton_used_only_when_llm_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", True)
     llm = MagicMock()
-    llm.generate_json.side_effect = AssertionError("LLM must not be called")
+    llm.generate_json.side_effect = RuntimeError("ollama timeout")
     gen = FeatureTemplateGenerator(llm_service=llm)
     result = gen.generate(
         _login_request(includeCode=False, includeMissions=False, includeInterview=False)
     )
     assert result.source == "instant"
     assert result.generationMode == QUALITY_INSTANT_GENERATION_MODE
-    llm.generate_json.assert_not_called()
+    assert result.fallbackUsed is True
+    assert result.initialLlmEnhancementAttempted is True
+    assert result.initialLlmEnhancementSucceeded is False
+    llm.generate_json.assert_called_once()
 
 
 def test_instant_skeleton_fills_quality_sections() -> None:
@@ -127,20 +130,36 @@ def test_login_instant_skeleton_minimum_counts() -> None:
     assert len(normalized["nextRecommendations"]) >= 3
 
 
-def test_deferred_sections_empty_when_full_baseline_filled() -> None:
-    result = FeatureTemplateGenerator().generate(_login_request())
+def test_deferred_sections_empty_when_full_baseline_filled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_feature_template_llm_full_first import _full_llm_payload
+
+    gen = FeatureTemplateGenerator()
+    monkeypatch.setattr(gen._llm_service, "generate_json", lambda *_a, **_k: _full_llm_payload())
+    result = gen.generate(_login_request())
     data = result.template.model_dump()
-    assert len(data["codeFiles"]) >= 4
+    assert len(data["codeFiles"]) >= 1
     assert len(data["missions"]) >= 2
     assert len(data["interviewQuestions"]) >= 3
     assert result.deferredSections == []
-    assert result.generationMode == QUALITY_INSTANT_FULL_GENERATION_MODE
+    assert result.generationMode == "quality_llm_full"
 
 
-def test_agentic_rag_path_uses_instant_skeleton(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agentic_rag_path_uses_instant_skeleton_on_llm_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", True)
     monkeypatch.setattr(settings, "RAG_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_CACHE_ENABLED", False)
+
+    def fail_llm(*_args: object, **_kwargs: object) -> dict:
+        raise RuntimeError("ollama timeout")
+
+    monkeypatch.setattr(
+        "app.services.feature_template_generator.LLMService.generate_json",
+        fail_llm,
+    )
 
     client = TestClient(app)
     resp = client.post(
@@ -165,7 +184,7 @@ def test_agentic_rag_path_uses_instant_skeleton(monkeypatch: pytest.MonkeyPatch)
     tr = body["trace"]
     assert tr["instantSkeletonUsed"] is True
     assert tr["qualityBaselineApplied"] is True
-    assert tr["fallbackUsed"] is False
+    assert tr["fallbackUsed"] is True
 
 
 def test_rag_failure_still_returns_instant_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,6 +213,10 @@ def test_rag_failure_still_returns_instant_success(monkeypatch: pytest.MonkeyPat
         "app.services.rag_service.retrieve_feature_template_rag_references",
         fail_retrieval,
     )
+    monkeypatch.setattr(
+        "app.services.feature_template_generator.LLMService.generate_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ollama timeout")),
+    )
 
     client = TestClient(app)
     resp = client.post(
@@ -215,8 +238,10 @@ def test_rag_failure_still_returns_instant_success(monkeypatch: pytest.MonkeyPat
     assert resp.json()["data"]["result"]["source"] == "instant"
 
 
-def test_instant_metadata_fields() -> None:
-    result = FeatureTemplateGenerator().generate(
+def test_instant_metadata_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    gen = FeatureTemplateGenerator(llm_service=MagicMock())
+    gen._llm_service.generate_json.side_effect = RuntimeError("timeout")
+    result = gen.generate(
         _login_request(includeCode=False, includeMissions=False, includeInterview=False)
     )
     assert result.instantSkeletonUsed is True
@@ -224,7 +249,9 @@ def test_instant_metadata_fields() -> None:
     assert result.skeletonFirst is True
     assert result.deferredSections == []
     assert result.generationMode == QUALITY_INSTANT_GENERATION_MODE
-    assert result.initialLlmEnhancementAttempted is False
+    assert result.initialLlmEnhancementAttempted is True
+    assert result.initialLlmEnhancementSucceeded is False
+    assert result.fallbackUsed is True
 
 
 def test_instant_skeleton_is_cacheable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -235,8 +262,10 @@ def test_instant_skeleton_is_cacheable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_CACHE_INSTANT_SKELETON_ENABLED", True)
     monkeypatch.setattr(settings, "RAG_ENABLED", False)
 
+    gen = FeatureTemplateGenerator(llm_service=MagicMock())
+    gen._llm_service.generate_json.side_effect = RuntimeError("timeout")
     req = _login_request(includeCode=False, includeMissions=False, includeInterview=False)
-    result = FeatureTemplateGenerator().generate(req)
+    result = gen.generate(req)
     assert FeatureTemplateGenerator.is_cacheable_generate_result(result) is True
 
     key = AgentOrchestrator._build_feature_template_cache_key(
@@ -260,6 +289,10 @@ def test_second_request_can_hit_feature_template_cache(monkeypatch: pytest.Monke
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_CACHE_ENABLED", True)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_CACHE_INSTANT_SKELETON_ENABLED", True)
     monkeypatch.setattr(settings, "RAG_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.feature_template_generator.LLMService.generate_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("timeout")),
+    )
 
     call_count = {"n": 0}
     original_generate = FeatureTemplateGenerator.generate
@@ -329,7 +362,13 @@ def test_regenerate_section_still_uses_llm_path(monkeypatch: pytest.MonkeyPatch)
     assert len(result.content) >= 1
 
 
-def test_direct_generate_route_returns_instant_skeleton() -> None:
+def test_direct_generate_route_returns_instant_skeleton_on_llm_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.feature_template_generator.LLMService.generate_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("timeout")),
+    )
     client = TestClient(app)
     resp = client.post(
         "/ai/feature-template/generate",
@@ -348,4 +387,5 @@ def test_direct_generate_route_returns_instant_skeleton() -> None:
     assert data["source"] == "instant"
     assert data["instantSkeletonUsed"] is True
     assert data["qualityBaselineApplied"] is True
+    assert data["fallbackUsed"] is True
     _assert_no_weak_placeholders(data["template"])

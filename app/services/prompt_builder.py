@@ -19,7 +19,7 @@ from app.prompts.feature_template_prompts import (
 from app.core.config import settings
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
-InitialSkeletonProfile = Literal["legacy", "fast", "ultra_fast"]
+InitialSkeletonProfile = Literal["legacy", "fast", "ultra_fast", "llm_full"]
 
 __all__ = [
     "InitialSkeletonProfile",
@@ -52,8 +52,10 @@ def _feature_template_rag_content_max_chars() -> int:
 
 
 def resolve_initial_generation_skeleton_profile() -> InitialSkeletonProfile:
-    """18차: ultra-fast > fast > legacy 우선순위."""
+    """24차: llm_full > ultra-fast > fast > legacy 우선순위."""
 
+    if settings.FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED:
+        return "llm_full"
     if settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED:
         return "ultra_fast"
     if settings.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED:
@@ -70,9 +72,11 @@ def is_fast_skeleton_enabled_for_initial_generate() -> bool:
 
 
 def skeleton_rag_top_k_for_initial_generate() -> int:
-    """최초 skeleton generate 프롬프트·retrieval 공통 top_k."""
+    """최초 generate 프롬프트·retrieval 공통 top_k."""
 
     profile = resolve_initial_generation_skeleton_profile()
+    if profile == "llm_full":
+        return max(1, min(10, int(settings.FEATURE_TEMPLATE_RAG_TOP_K)))
     if profile == "legacy":
         return max(1, min(10, int(settings.FEATURE_TEMPLATE_RAG_TOP_K)))
     return max(1, min(10, int(settings.FEATURE_TEMPLATE_SKELETON_RAG_TOP_K)))
@@ -80,15 +84,16 @@ def skeleton_rag_top_k_for_initial_generate() -> int:
 
 def skeleton_rag_content_max_chars_for_initial_generate() -> int:
     profile = resolve_initial_generation_skeleton_profile()
-    if profile == "legacy":
+    if profile in ("legacy", "llm_full"):
         return _feature_template_rag_content_max_chars()
     return max(50, int(settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS))
 
 
 def skeleton_max_tokens_for_initial_generate() -> int | None:
-    """legacy는 상한 없음(LLM_MAX_TOKENS), fast/ultra-fast는 skeleton 전용 상한."""
+    """legacy/llm_full는 상한 없음(LLM_MAX_TOKENS), fast/ultra-fast는 skeleton 전용 상한."""
 
-    if resolve_initial_generation_skeleton_profile() == "legacy":
+    profile = resolve_initial_generation_skeleton_profile()
+    if profile in ("legacy", "llm_full"):
         return None
     return max(64, int(settings.FEATURE_TEMPLATE_SKELETON_MAX_TOKENS))
 
@@ -301,11 +306,67 @@ def _build_initial_generation_section_instructions(
 ) -> str:
     """include flags에 따라 최초 generate용 섹션 지시만 짧게 조립한다."""
 
+    if profile == "llm_full":
+        return _build_llm_full_section_instructions(request)
     if profile == "ultra_fast":
         return _build_ultra_fast_skeleton_section_instructions(request)
     if profile == "fast":
         return _build_fast_skeleton_section_instructions(request)
     return _build_legacy_initial_generation_section_instructions(request)
+
+
+def _build_llm_full_section_instructions(
+    request: FeatureTemplateGenerateRequest,
+) -> str:
+    lines = [
+        "- LLM full-first: 9개 섹션을 한 번에 상세 생성한다. skeleton-only·stub·빈 배열 우회는 금지한다.",
+        "- overview: featureName, purpose, useCases, resultDescription, techStack, learningGoals를 실무형으로 채운다.",
+        "- requirements: 최소 3개. 입력, 검증, 성공/실패, 보안 관점으로 나눈다.",
+        "- flow: steps 5개 이상, layers는 Controller/Service/Repository/DB 및 필요 시 외부 연동.",
+        "- apiSpec: 최소 1개. requestBody/responseBody는 필드 예시가 있는 JSON 객체, status는 정수.",
+        "- basicQuestions: 최소 3개. type은 가능한 한 섞고 choices는 multiple_choice가 아니면 null.",
+        "- nextRecommendations: 최소 3개.",
+    ]
+
+    if request.includeCode:
+        lines.append(
+            "- codeFiles: includeCode=true이므로 fileName·filePath·role·language·content를 "
+            "실제 동작 가능한 예시로 최소 4개 작성한다. Spring Boot 로그인은 "
+            "LoginController.java, LoginService.java, LoginRequest.java, LoginResponse.java 등을 포함한다."
+        )
+    else:
+        lines.append(
+            "- codeFiles: includeCode=false 이므로 반드시 []만 반환한다."
+        )
+
+    if request.includeMissions:
+        lines.append(
+            "- missions: includeMissions=true이므로 최소 2개. description 앞 '미션 목표:' 한 줄, "
+            "requirements·successCriteria를 포함한다."
+        )
+    else:
+        lines.append(
+            "- missions: includeMissions=false 이므로 반드시 []만 반환한다."
+        )
+
+    if request.includeInterview:
+        lines.append(
+            "- interviewQuestions: includeInterview=true이므로 최소 3개. keyPoints·sampleAnswer를 포함한다."
+        )
+    else:
+        lines.append(
+            "- interviewQuestions: includeInterview=false 이므로 반드시 []만 반환한다."
+        )
+
+    lines.extend(
+        [
+            "- RAG context가 있으면 requirements·apiSpec·flow·codeFiles에 우선 반영한다.",
+            "- 모든 필드는 schema 이름을 그대로 사용한다. goal/hints/keywords/title 단독 key 금지.",
+            '- enum: difficulty는 "beginner"|"intermediate"|"advanced", basicQuestions.type은 허용값만.',
+            '- 타입: requirements[].priority는 문자열, apiSpec[].status는 정수, flow.steps는 문자열 배열.',
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _build_ultra_fast_skeleton_section_instructions(
@@ -415,6 +476,109 @@ def _build_initial_generation_json_skeleton(
     profile: InitialSkeletonProfile,
 ) -> str:
     """9개 top-level key를 유지하되 skeleton 프로필별 예시를 최소화한다."""
+
+    if profile == "llm_full":
+        skeleton: dict[str, Any] = {
+            "overview": {
+                "featureName": request.featureName,
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [request.language]
+                + ([request.framework] if request.framework else []),
+                "learningGoals": [],
+            },
+            "requirements": [
+                {
+                    "requirementId": "R-001",
+                    "name": "",
+                    "description": "",
+                    "inputValue": "",
+                    "processCondition": "",
+                    "successResult": "",
+                    "failureResult": "",
+                    "priority": "HIGH",
+                    "relatedScreenOrApi": "",
+                }
+            ],
+            "flow": {
+                "steps": [
+                    "1) 요청 수신",
+                    "2) 입력 검증",
+                    "3) 비즈니스 처리",
+                    "4) 결과 생성",
+                    "5) 응답 반환",
+                ],
+                "layers": [
+                    {"layer": "Controller", "role": "요청 수신·응답 반환"},
+                    {"layer": "Service", "role": "비즈니스 로직"},
+                    {"layer": "Repository", "role": "데이터 접근"},
+                    {"layer": "DB", "role": "영속 저장"},
+                ],
+            },
+            "apiSpec": [
+                {
+                    "apiName": "",
+                    "method": "POST",
+                    "endpoint": "/api/feature",
+                    "description": "",
+                    "requestBody": {"field": "value"},
+                    "responseBody": {"data": {}},
+                    "status": 200,
+                }
+            ],
+            "codeFiles": [] if not request.includeCode else [
+                {
+                    "fileName": "",
+                    "filePath": "",
+                    "role": "Controller",
+                    "language": request.language,
+                    "content": "",
+                }
+            ],
+            "basicQuestions": [
+                {
+                    "questionId": "Q-001",
+                    "type": "short_answer",
+                    "question": "",
+                    "choices": None,
+                    "answer": "",
+                    "explanation": "",
+                    "relatedSection": "requirements",
+                    "difficulty": request.level.value,
+                }
+            ],
+            "missions": [] if not request.includeMissions else [
+                {
+                    "missionId": "M-001",
+                    "title": "",
+                    "description": "",
+                    "missionType": "enhancement",
+                    "requirements": [],
+                    "successCriteria": [],
+                    "relatedRequirements": [],
+                    "difficulty": request.level.value,
+                }
+            ],
+            "interviewQuestions": [] if not request.includeInterview else [
+                {
+                    "questionId": "IQ-001",
+                    "question": "",
+                    "keyPoints": [],
+                    "sampleAnswer": "",
+                    "relatedSection": "flow",
+                }
+            ],
+            "nextRecommendations": [
+                {
+                    "featureName": "",
+                    "reason": "",
+                    "expectedLearning": "",
+                    "priority": 1,
+                }
+            ],
+        }
+        return json.dumps(skeleton, ensure_ascii=False, indent=2)
 
     if profile == "ultra_fast":
         skeleton: dict[str, Any] = {
@@ -660,11 +824,14 @@ def build_feature_template_prompt_with_applied_rags(
     )
 
     from app.prompts.feature_template_prompts import (
+        FEATURE_TEMPLATE_LLM_FULL_SUPPLEMENT,
         FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT,
     )
 
     system_prompt = FEATURE_TEMPLATE_SYSTEM_PROMPT
-    if profile == "ultra_fast":
+    if profile == "llm_full":
+        system_prompt = f"{system_prompt}\n\n{FEATURE_TEMPLATE_LLM_FULL_SUPPLEMENT}"
+    elif profile == "ultra_fast":
         system_prompt = f"{system_prompt}\n\n{FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_SUPPLEMENT}"
 
     prompt = f"{system_prompt}\n\n{user_prompt}"

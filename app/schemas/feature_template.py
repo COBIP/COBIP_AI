@@ -268,16 +268,17 @@ class FeatureTemplateGenerateResult(BaseModel):
     generationMode: Literal[
         "skeleton",
         "llm_full",
+        "quality_llm_full",
         "fallback",
         "section_regenerated",
         "quality_instant_skeleton",
         "quality_instant_full",
     ] = Field(
-        default="skeleton",
-        description="최초 generate 생성 전략. 12차부터 기본값은 skeleton-first",
+        default="quality_llm_full",
+        description="최초 generate 생성 전략. 기본값은 LLM full-first",
     )
     skeletonFirst: bool = Field(
-        default=True,
+        default=False,
         description="최초 generate가 빠른 기본 구조를 먼저 반환하는 전략인지 여부",
     )
     deferredSections: list[str] = Field(
@@ -329,6 +330,10 @@ class FeatureTemplateGenerateResult(BaseModel):
         ge=0,
         description="22차: optional LLM enhancement 소요(ms)",
     )
+    fallbackUsed: bool = Field(
+        default=False,
+        description="LLM full-first 실패 후 instant/mock fallback 사용 여부",
+    )
 
 
 class FeatureTemplateGenerateResponse(BaseModel):
@@ -341,12 +346,13 @@ class FeatureTemplateGenerateResponse(BaseModel):
     generationMode: Literal[
         "skeleton",
         "llm_full",
+        "quality_llm_full",
         "fallback",
         "section_regenerated",
         "quality_instant_skeleton",
         "quality_instant_full",
-    ] = "skeleton"
-    skeletonFirst: bool = True
+    ] = "quality_llm_full"
+    skeletonFirst: bool = False
     deferredSections: list[str] = Field(
         default_factory=lambda: ["codeFiles", "missions", "interviewQuestions"]
     )
@@ -361,6 +367,7 @@ class FeatureTemplateGenerateResponse(BaseModel):
     initialLlmEnhancementAttempted: bool = False
     initialLlmEnhancementSucceeded: bool = False
     initialLlmEnhancementMs: int | None = None
+    fallbackUsed: bool = False
 
 
 class FeatureTemplateRegenerateSectionResult(BaseModel):

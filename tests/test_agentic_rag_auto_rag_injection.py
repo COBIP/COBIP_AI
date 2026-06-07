@@ -347,8 +347,8 @@ def test_qdrant_empty_with_no_manual_still_succeeds(monkeypatch: pytest.MonkeyPa
     assert tr["ragInjectedCount"] == 0
     assert tr["ragSource"] == "none"
     assert tr["ragContextAvailable"] is False
-    assert tr["generationMode"] in {"skeleton", "fallback"}
-    assert tr["skeletonFirst"] is True
+    assert tr["generationMode"] in {"quality_llm_full", "skeleton", "fallback"}
+    assert tr["skeletonFirst"] is False
     assert tr["deferredSections"] == ["codeFiles", "missions", "interviewQuestions"]
 
 

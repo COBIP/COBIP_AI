@@ -35,8 +35,20 @@ def _req(**kwargs: object) -> FeatureTemplateGenerateRequest:
     return FeatureTemplateGenerateRequest(**base)
 
 
+@pytest.fixture(autouse=True)
+def _disable_llm_full_for_skeleton_profile_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED", False)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", True)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
+
+
 def test_ultra_fast_skeleton_defaults_enabled() -> None:
-    assert settings.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED is True
+    from app.core.config import Settings
+
+    defaults = Settings()
+    assert defaults.FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED is True
+    assert defaults.FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED is False
+    assert defaults.FEATURE_TEMPLATE_FAST_SKELETON_ENABLED is False
     assert settings.FEATURE_TEMPLATE_SKELETON_RAG_TOP_K == 2
     assert settings.FEATURE_TEMPLATE_SKELETON_RAG_CONTENT_MAX_CHARS == 300
     assert settings.FEATURE_TEMPLATE_SKELETON_MAX_TOKENS == 800

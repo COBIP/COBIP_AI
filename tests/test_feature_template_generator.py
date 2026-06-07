@@ -52,6 +52,9 @@ def test_generate_fallback_has_all_sections(
     assert result.appliedReferences == []
     assert result.generationMode == "fallback"
     assert result.skeletonFirst is True
+    assert result.fallbackUsed is True
+    assert result.initialLlmEnhancementAttempted is True
+    assert result.initialLlmEnhancementSucceeded is False
     assert result.deferredSections == ["codeFiles", "missions", "interviewQuestions"]
     assert isinstance(result.fastSkeletonEnabled, bool)
 
@@ -59,7 +62,6 @@ def test_generate_fallback_has_all_sections(
 def test_generate_success_path_uses_normalizer(
     minimal_request: FeatureTemplateGenerateRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", False)
     gen = FeatureTemplateGenerator()
     seen: dict[str, object] = {}
 
@@ -89,10 +91,13 @@ def test_generate_success_path_uses_normalizer(
     assert result.source == "ollama"
     assert set(result.template.model_dump().keys()) == _CANONICAL_KEYS
     assert result.appliedReferences == []
-    assert result.generationMode == "skeleton"
-    assert result.skeletonFirst is True
+    assert result.generationMode == "quality_llm_full"
+    assert result.skeletonFirst is False
+    assert result.fallbackUsed is False
+    assert result.initialLlmEnhancementAttempted is True
+    assert result.initialLlmEnhancementSucceeded is True
     assert result.deferredSections == ["codeFiles", "missions", "interviewQuestions"]
-    assert result.fastSkeletonEnabled is True
+    assert result.fastSkeletonEnabled is False
     assert seen["timeout_seconds"] == settings.FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS
 
 

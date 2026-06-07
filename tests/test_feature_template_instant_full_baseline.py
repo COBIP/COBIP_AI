@@ -121,10 +121,10 @@ def test_include_interview_false_clears_interview_questions() -> None:
     assert normalized["interviewQuestions"] == []
 
 
-def test_instant_full_path_stays_fast_without_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_instant_full_path_stays_fast_on_llm_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_INSTANT_SKELETON_ENABLED", True)
     llm = MagicMock()
-    llm.generate_json.side_effect = AssertionError("LLM must not be called")
+    llm.generate_json.side_effect = RuntimeError("timeout")
     gen = FeatureTemplateGenerator(llm_service=llm)
 
     t0 = time.perf_counter()
@@ -133,15 +133,20 @@ def test_instant_full_path_stays_fast_without_llm(monkeypatch: pytest.MonkeyPatc
 
     assert result.source == "instant"
     assert result.generationMode == QUALITY_INSTANT_FULL_GENERATION_MODE
+    assert result.fallbackUsed is True
     assert len(result.template.codeFiles) >= 4
     assert len(result.template.missions) >= 2
     assert len(result.template.interviewQuestions) >= 3
     assert elapsed_ms < 2000
-    llm.generate_json.assert_not_called()
+    llm.generate_json.assert_called_once()
 
 
-def test_all_flags_false_uses_skeleton_generation_mode() -> None:
-    result = FeatureTemplateGenerator().generate(
+def test_all_flags_false_uses_instant_skeleton_on_llm_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gen = FeatureTemplateGenerator(llm_service=MagicMock())
+    gen._llm_service.generate_json.side_effect = RuntimeError("timeout")
+    result = gen.generate(
         _login_request(
             includeCode=False,
             includeMissions=False,
@@ -151,6 +156,7 @@ def test_all_flags_false_uses_skeleton_generation_mode() -> None:
     assert result.generationMode == QUALITY_INSTANT_GENERATION_MODE
     assert result.instantFullBaselineApplied is False
     assert result.deferredSections == []
+    assert result.fallbackUsed is True
 
 
 def test_cache_key_uses_v5_prefix() -> None:

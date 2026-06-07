@@ -88,8 +88,8 @@ def test_trace_metadata_feature_template_with_rag(monkeypatch: pytest.MonkeyPatc
     assert resp.status_code == 200
     data = resp.json()["data"]
     tr = data["trace"]
-    assert data["result"]["generationMode"] == "skeleton"
-    assert data["result"]["skeletonFirst"] is True
+    assert data["result"]["generationMode"] == "quality_llm_full"
+    assert data["result"]["skeletonFirst"] is False
     assert data["result"]["deferredSections"] == [
         "codeFiles",
         "missions",
@@ -105,8 +105,8 @@ def test_trace_metadata_feature_template_with_rag(monkeypatch: pytest.MonkeyPatc
     assert tr["handlerReason"]
     assert tr["routeDecision"]
     assert tr["executionMode"] == "rule_based"
-    assert tr["generationMode"] == "skeleton"
-    assert tr["skeletonFirst"] is True
+    assert tr["generationMode"] == "quality_llm_full"
+    assert tr["skeletonFirst"] is False
     assert tr["deferredSections"] == ["codeFiles", "missions", "interviewQuestions"]
     assert "classifier" in tr
     assert "handler" in tr
@@ -194,6 +194,7 @@ def test_trace_metadata_fallback_used(monkeypatch: pytest.MonkeyPatch) -> None:
             source="fallback",
             appliedReferences=[],
             generationMode="fallback",
+            fallbackUsed=True,
         )
 
     monkeypatch.setattr(FeatureTemplateGenerator, "generate", fake_generate)

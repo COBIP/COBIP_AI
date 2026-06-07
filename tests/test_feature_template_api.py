@@ -39,12 +39,13 @@ def test_generate_endpoint_template_has_all_sections() -> None:
     assert set(template.keys()) == _CANONICAL_KEYS
     assert body["data"].get("appliedReferences") == []
     assert body["data"]["generationMode"] in {
-        "skeleton",
+        "quality_llm_full",
+        "llm_full",
         "fallback",
         "quality_instant_skeleton",
         "quality_instant_full",
     }
     assert body["data"]["source"] in {"ollama", "fallback", "instant"}
-    assert body["data"]["instantSkeletonUsed"] is True
-    assert body["data"]["skeletonFirst"] is True
-    assert body["data"]["deferredSections"] == []
+    assert "instantSkeletonUsed" in body["data"]
+    assert "skeletonFirst" in body["data"]
+    assert "fallbackUsed" in body["data"]

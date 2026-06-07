@@ -24,6 +24,7 @@ def generate_feature_template(
             "source": result.source,
             "appliedReferences": result.appliedReferences,
             **metadata,
+            "fallbackUsed": result.fallbackUsed,
         },
     )
 

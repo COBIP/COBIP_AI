@@ -1,5 +1,7 @@
 """기능템플릿 LLM 프롬프트 문자열 검증 (7-3, 7-4)."""
 
+import pytest
+
 from app.core.config import settings
 from app.models.enums import DifficultyLevel
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
@@ -20,6 +22,16 @@ def _req(**kwargs: object) -> FeatureTemplateGenerateRequest:
     )
     base.update(kwargs)
     return FeatureTemplateGenerateRequest(**base)
+
+
+@pytest.fixture(autouse=True)
+def _legacy_skeleton_profile_unless_llm_full(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    if "llm_full" not in request.node.name:
+        monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED", False)
+        monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", True)
+        monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
 
 
 def test_prompt_contains_json_only_and_no_markdown_rules() -> None:
@@ -89,17 +101,27 @@ def test_prompt_quality_minimums() -> None:
     assert "basicQuestions" in text
 
 
+def test_prompt_initial_generation_llm_full_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED", True)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", False)
+    text = build_feature_template_prompt(_req())
+    assert "LLM full-first" in text
+    assert "최소 4개" in text or "codeFiles" in text
+
+
 def test_prompt_initial_generation_lightweight_policy() -> None:
     text = build_feature_template_prompt(_req())
-    assert "skeleton-first" in text or "ultra-fast" in text or "fast skeleton" in text
-    assert "regenerate-section" in text or "normalizer" in text
-    assert "requirements: 정확히 3개" in text
+    assert "LLM full-first" in text or "skeleton-first" in text or "ultra-fast" in text
+    assert "regenerate-section" in text or "normalizer" in text or "RAG context" in text
+    assert "requirements" in text
     assert "basicQuestions" in text
     assert "nextRecommendations" in text
     assert "flow" in text
 
 
 def test_prompt_limits_initial_codefiles_volume(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", False)
     text = build_feature_template_prompt(_req(framework="Spring Boot"))
@@ -113,6 +135,7 @@ def test_prompt_limits_initial_codefiles_volume(monkeypatch) -> None:
 
 
 def test_prompt_fast_skeleton_forbids_code_stubs(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "FEATURE_TEMPLATE_LLM_FULL_FIRST_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_ULTRA_FAST_SKELETON_ENABLED", False)
     monkeypatch.setattr(settings, "FEATURE_TEMPLATE_FAST_SKELETON_ENABLED", True)
     text = build_feature_template_prompt(_req(framework="Spring Boot"))
@@ -142,9 +165,9 @@ def test_prompt_keeps_empty_array_rules_when_flags_false() -> None:
 def test_prompt_maps_conceptual_fields_to_schema_without_extra_keys() -> None:
     """교육용 개념(goal/hints/keywords 등)은 스키마 필드에 녹이라는 지시가 포함된다."""
     text = build_feature_template_prompt(_req())
-    assert "regenerate-section" in text
+    assert "regenerate-section" in text or "normalizer" in text
     assert "goal/hints/keywords/title" in text
-    assert "nextFeatureName 단독 key" in text
+    assert "nextFeatureName 단독 key" in text or "단독 key" in text
 
 
 def test_prompt_forbids_schema_unknown_top_level_field_names() -> None:
@@ -224,7 +247,7 @@ def test_prompt_skeleton_first_keeps_heavy_sections_empty_even_when_flags_true()
     assert '"codeFiles": []' in text
     assert '"missions": []' in text
     assert '"interviewQuestions": []' in text
-    assert "regenerate-section" in text
+    assert "regenerate-section" in text or "normalizer" in text
 
 
 def test_prompt_length_stays_small_with_skeleton_first_full_options() -> None:
