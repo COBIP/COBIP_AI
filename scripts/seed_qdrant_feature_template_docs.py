@@ -49,10 +49,18 @@ _CATEGORY = "feature_template"
 _FILE_META: dict[str, tuple[str, str, str]] = {
     "spring-boot-login-standard.md": ("Spring Boot", "로그인", "login-standard"),
     "spring-boot-auth-jwt-bcrypt.md": ("Spring Boot", "로그인", "auth-jwt-bcrypt"),
-    "cobip-feature-template-section-rules.md": ("Spring Boot", "로그인", "section-rules"),
-    "cobip-api-spec-rules.md": ("Spring Boot", "로그인", "api-spec-rules"),
-    "feature-template-quality-anti-patterns.md": ("Spring Boot", "로그인", "anti-patterns"),
+    "spring-boot-signup-standard.md": ("Spring Boot", "회원가입", "signup-standard"),
+    "spring-boot-crud-standard.md": ("Spring Boot", "게시글 CRUD", "crud-standard"),
+    "spring-boot-jwt-auth-standard.md": ("Spring Boot", "JWT 인증", "jwt-auth-standard"),
+    "cobip-feature-template-section-rules.md": ("Spring Boot", "공통", "section-rules"),
+    "cobip-api-spec-rules.md": ("Spring Boot", "공통", "api-spec-rules"),
+    "feature-template-quality-anti-patterns.md": ("Spring Boot", "공통", "anti-patterns"),
 }
+
+
+def _tags_for_document(feature_name: str, section: str) -> tuple[str, ...]:
+    slug = feature_name.replace(" ", "-").lower() if feature_name else "common"
+    return ("feature-template", "cobip", section, "spring-boot", slug)
 
 
 @dataclass(frozen=True)
@@ -91,16 +99,10 @@ def build_feature_template_docs_seed_documents(
         if not text:
             continue
         rel = str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
-        meta = _FILE_META.get(path.name, ("Spring Boot", "로그인", path.stem))
+        meta = _FILE_META.get(path.name, ("Spring Boot", "공통", path.stem))
         framework, feature_name, section = meta
         title = _extract_title(text, path.stem.replace("-", " "))
-        tags = (
-            "feature-template",
-            "cobip",
-            section,
-            "spring-boot",
-            "login",
-        )
+        tags = _tags_for_document(feature_name, section)
         docs.append(
             FeatureTemplateSeedDocument(
                 title=title,

@@ -28,10 +28,12 @@ __all__ = [
     "FeatureTemplateRagRetrieval",
     "RetrieverProtocol",
     "build_feature_template_retrieval_query",
+    "classify_feature_template_bucket",
     "effective_feature_template_rag_top_k",
     "build_feature_template_rag_cache_key",
     "feature_template_rag_content_max_chars",
     "merge_manual_and_auto_rag_references",
+    "rerank_feature_template_rag_references",
     "retrieve_feature_template_rag_references",
 ]
 
@@ -42,6 +44,128 @@ _MAX_QUERY_CHARS = 256
 _MAX_MESSAGE_SNIPPET = 160
 _MIN_CONTENT_MAX_CHARS = 50
 _MAX_TOP_K = 10
+_GENERAL_FEATURE_NAMES = frozenset({"공통", "common", ""})
+_LOGIN_BUCKETS = frozenset({"login", "로그인"})
+_SIGNUP_BUCKETS = frozenset({"signup", "회원가입", "sign-up", "register", "가입"})
+_CRUD_BUCKETS = frozenset({"crud", "게시글 crud", "게시글", "post", "posts", "게시판"})
+_JWT_AUTH_BUCKETS = frozenset({"jwt_auth", "jwt 인증", "jwt인증", "jwt authentication"})
+
+
+def classify_feature_template_bucket(feature_name: str | None) -> str | None:
+    """요청/문서 featureName을 검색·rerank용 bucket으로 분류."""
+
+    raw = (feature_name or "").strip()
+    if not raw:
+        return None
+    fn = raw.lower()
+    if fn in _LOGIN_BUCKETS or raw in ("로그인", "Login"):
+        return "login"
+    if fn in _SIGNUP_BUCKETS or "회원가입" in raw or "signup" in fn:
+        return "signup"
+    if fn in _CRUD_BUCKETS or "crud" in fn or "게시글" in raw:
+        return "crud"
+    if "jwt" in fn or raw in ("JWT 인증", "JWT인증"):
+        return "jwt_auth"
+    return fn
+
+
+def _feature_specific_query_tokens(bucket: str | None) -> list[str]:
+    if bucket == "login":
+        return ["JWT", "BCrypt", "LoginController", "LoginService", "DTO", "POST /api/auth/login"]
+    if bucket == "signup":
+        return [
+            "회원가입",
+            "SignupController",
+            "SignupService",
+            "BCrypt",
+            "email",
+            "409",
+            "POST /api/auth/signup",
+        ]
+    if bucket == "crud":
+        return [
+            "CRUD",
+            "게시글",
+            "PostController",
+            "PostService",
+            "PostRepository",
+            "Create",
+            "Update",
+            "Delete",
+            "404",
+        ]
+    if bucket == "jwt_auth":
+        return [
+            "JWT",
+            "JwtTokenProvider",
+            "JwtAuthenticationFilter",
+            "SecurityConfig",
+            "Bearer",
+            "Authorization",
+            "authenticationRequired",
+        ]
+    return []
+
+
+def _ref_payload_feature_name(ref: dict[str, Any]) -> str:
+    meta = ref.get("metadata") if isinstance(ref.get("metadata"), dict) else {}
+    for key in ("featureName",):
+        val = ref.get(key) if key in ref else meta.get(key)
+        if isinstance(val, str):
+            return val.strip()
+    return ""
+
+
+def rerank_feature_template_rag_references(
+    references: list[dict[str, Any]],
+    *,
+    feature_name: str | None = None,
+    framework: str | None = None,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """vector score + featureName/framework/category 일치로 재정렬."""
+
+    if not references:
+        return []
+    if top_k < 1:
+        return []
+
+    request_bucket = classify_feature_template_bucket(feature_name)
+    fw_norm = (framework or "").strip().lower()
+
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for index, ref in enumerate(references):
+        base = float(ref.get("score") or 0.0)
+        ref_fn = _ref_payload_feature_name(ref)
+        ref_bucket = classify_feature_template_bucket(ref_fn)
+        meta = ref.get("metadata") if isinstance(ref.get("metadata"), dict) else {}
+        ref_cat = (ref.get("category") or meta.get("category") or "").strip()
+        ref_fw = (ref.get("framework") or meta.get("framework") or "").strip().lower()
+
+        bonus = 0.0
+        if request_bucket and ref_bucket == request_bucket:
+            bonus += 2.5
+        if feature_name and ref_fn and feature_name.strip() == ref_fn:
+            bonus += 1.5
+        if ref_fn in _GENERAL_FEATURE_NAMES:
+            bonus += 0.25
+        elif request_bucket and ref_bucket == "login" and request_bucket != "login":
+            bonus -= 1.75
+        if ref_cat == "feature_template":
+            bonus += 0.15
+        if fw_norm and ref_fw and "spring" in fw_norm and "spring" in ref_fw:
+            bonus += 0.15
+
+        scored.append((base + bonus, -index, ref))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in scored[:top_k]]
+
+
+def _retrieval_fetch_top_k(requested_top_k: int) -> int:
+    """rerank 여유를 위해 Qdrant에서 더 많이 가져온다."""
+
+    return min(_MAX_TOP_K, max(requested_top_k * 2, requested_top_k + 3))
 
 
 def feature_template_rag_content_max_chars() -> int:
@@ -101,29 +225,22 @@ def build_feature_template_retrieval_query(
     """
 
     tokens: list[str] = []
-    for raw in (framework, feature_name, language, level):
+    fn_text = ""
+    if feature_name is not None:
+        fn_text = " ".join(str(feature_name).split())
+        if fn_text:
+            tokens.extend([fn_text, fn_text])
+
+    bucket = classify_feature_template_bucket(feature_name)
+    tokens.extend(_feature_specific_query_tokens(bucket))
+
+    for raw in (framework, language, level):
         if raw is None:
             continue
         text = " ".join(str(raw).split())
         if text:
             tokens.append(text)
     tokens.extend(["기능템플릿", "요구사항", "API", "코드", "학습"])
-
-    fn_norm = (feature_name or "").strip().lower()
-    fw_norm = (framework or "").strip().lower()
-    if fn_norm in ("로그인", "login") and "spring" in fw_norm:
-        tokens.extend(
-            [
-                "JWT",
-                "BCrypt",
-                "Controller",
-                "Service",
-                "DTO",
-                "missions",
-                "interview",
-                "questions",
-            ]
-        )
 
     base = " ".join(tokens).strip()
 
@@ -224,6 +341,8 @@ def retrieve_feature_template_rag_references(
     enabled: bool | None = None,
     retriever: RetrieverProtocol | None = None,
     cache_service: CacheService | None = None,
+    feature_name: str | None = None,
+    framework: str | None = None,
 ) -> FeatureTemplateRagRetrieval:
     """기능템플릿 자동 RAG retrieval. 어떤 단계에서 실패해도 예외를 다시 던지지 않는다."""
 
@@ -257,9 +376,11 @@ def retrieve_feature_template_rag_references(
         )
 
     used_cache = cache_service or CacheService()
+    effective_top_k = effective_feature_template_rag_top_k(top_k)
     cache_key = build_feature_template_rag_cache_key(
         query=q,
-        top_k=effective_feature_template_rag_top_k(top_k),
+        top_k=effective_top_k,
+        feature_name=feature_name,
     )
     if settings.RAG_RETRIEVAL_CACHE_ENABLED:
         cached = used_cache.get_json(cache_key)
@@ -302,16 +423,17 @@ def retrieve_feature_template_rag_references(
             )
 
     effective_top_k = effective_feature_template_rag_top_k(top_k)
+    fetch_k = _retrieval_fetch_top_k(effective_top_k)
     embedding_ms = 0
     qdrant_search_ms = 0
     try:
         if hasattr(used_retriever, "retrieve_with_timing"):
-            timing_result = used_retriever.retrieve_with_timing(q, effective_top_k)
+            timing_result = used_retriever.retrieve_with_timing(q, fetch_k)
             raw_hits = timing_result.references
             embedding_ms = int(getattr(timing_result, "embeddingMs", 0) or 0)
             qdrant_search_ms = int(getattr(timing_result, "qdrantSearchMs", 0) or 0)
         else:
-            raw_hits = used_retriever.retrieve(q, effective_top_k)
+            raw_hits = used_retriever.retrieve(q, fetch_k)
     except Exception as exc:
         logger.warning(
             "feature_template rag retrieve failed errorType=%s",
@@ -345,6 +467,13 @@ def retrieve_feature_template_rag_references(
         refs.append(ref)
     reference_build_ms = max(0, int((time.perf_counter() - t_ref) * 1000))
 
+    refs = rerank_feature_template_rag_references(
+        refs,
+        feature_name=feature_name,
+        framework=framework,
+        top_k=effective_top_k,
+    )
+
     status: RagRetrievalStatus = "success" if refs else "empty"
     out = FeatureTemplateRagRetrieval(
         attempted=True,
@@ -371,14 +500,20 @@ def retrieve_feature_template_rag_references(
     return out
 
 
-def build_feature_template_rag_cache_key(*, query: str, top_k: int) -> str:
+def build_feature_template_rag_cache_key(
+    *,
+    query: str,
+    top_k: int,
+    feature_name: str | None = None,
+) -> str:
     payload = {
         "query": query,
         "top_k": top_k,
+        "feature_name": (feature_name or "").strip(),
         "content_max_chars": feature_template_rag_content_max_chars(),
         "collection": settings.QDRANT_COLLECTION,
         "embedding_model": settings.EMBEDDING_MODEL,
-        "version": "v1",
+        "version": "v2",
     }
     normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]

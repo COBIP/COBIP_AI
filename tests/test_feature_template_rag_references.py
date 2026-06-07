@@ -154,7 +154,14 @@ class _FakeRetrieverFailing:
 
 def test_feature_template_docs_seed_payload_has_required_metadata() -> None:
     docs = build_feature_template_docs_seed_documents()
-    assert len(docs) >= 5
+    assert len(docs) >= 8
+    expected_by_file = {
+        "spring-boot-login-standard.md": "로그인",
+        "spring-boot-signup-standard.md": "회원가입",
+        "spring-boot-crud-standard.md": "게시글 CRUD",
+        "spring-boot-jwt-auth-standard.md": "JWT 인증",
+        "cobip-feature-template-section-rules.md": "공통",
+    }
     for doc in docs:
         payload = build_payload(doc)
         for key in (
@@ -170,7 +177,9 @@ def test_feature_template_docs_seed_payload_has_required_metadata() -> None:
         assert payload["source"] == "cobip_feature_template_standard"
         assert payload["category"] == "feature_template"
         assert payload["framework"] == "Spring Boot"
-        assert payload["featureName"] == "로그인"
+        basename = doc.relative_path.rsplit("/", 1)[-1]
+        if basename in expected_by_file:
+            assert payload["featureName"] == expected_by_file[basename]
         assert len(payload["contentPreview"]) > 0
 
 
@@ -201,7 +210,7 @@ def test_seed_dry_run_lists_feature_template_docs(
     import json
 
     summary = json.loads(capsys.readouterr().out.strip())
-    assert summary["documentCount"] >= 5
+    assert summary["documentCount"] >= 8
     assert summary["upsert"] is None
 
 
