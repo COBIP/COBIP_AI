@@ -108,6 +108,23 @@ def build_feature_template_retrieval_query(
         if text:
             tokens.append(text)
     tokens.extend(["기능템플릿", "요구사항", "API", "코드", "학습"])
+
+    fn_norm = (feature_name or "").strip().lower()
+    fw_norm = (framework or "").strip().lower()
+    if fn_norm in ("로그인", "login") and "spring" in fw_norm:
+        tokens.extend(
+            [
+                "JWT",
+                "BCrypt",
+                "Controller",
+                "Service",
+                "DTO",
+                "missions",
+                "interview",
+                "questions",
+            ]
+        )
+
     base = " ".join(tokens).strip()
 
     if message:
@@ -180,7 +197,7 @@ def _hit_to_reference(hit_dict: dict[str, Any]) -> dict[str, Any] | None:
         out["score"] = float(score)
 
     keep_meta: dict[str, Any] = {}
-    for key in ("docType", "section", "fileName", "path", "url"):
+    for key in ("docType", "section", "fileName", "path", "url", "category", "framework", "featureName", "source", "contentPreview"):
         mv = metadata.get(key)
         if isinstance(mv, str) and mv.strip():
             keep_meta[key] = mv.strip()
@@ -189,6 +206,14 @@ def _hit_to_reference(hit_dict: dict[str, Any]) -> dict[str, Any] | None:
         keep_meta["originalContentLength"] = original_len
     if keep_meta:
         out["metadata"] = keep_meta
+
+    payload_source = metadata.get("source")
+    if isinstance(payload_source, str) and payload_source.strip():
+        out["source"] = payload_source.strip()
+    for key in ("category", "framework", "featureName"):
+        val = metadata.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = val.strip()
     return out
 
 

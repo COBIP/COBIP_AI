@@ -21,6 +21,9 @@ Qdrant 컬렉션에 로그인 기능 기준 초기 지식 문서를 upsert한다
 
     # 실제 upsert (사용자가 명시한 경우에만)
     python scripts/seed_qdrant_login_knowledge.py --apply --collection cobip_knowledge
+
+    # docs/rag/feature-template 마크다운 원본도 함께 upsert
+    python scripts/seed_qdrant_login_knowledge.py --apply --include-feature-template-docs
 """
 
 from __future__ import annotations
@@ -403,6 +406,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="결과를 JSON 형태로 출력 (자동화/검증용).",
     )
+    parser.add_argument(
+        "--include-feature-template-docs",
+        action="store_true",
+        help=(
+            "docs/rag/feature-template/*.md COBIP 표준 문서도 함께 upsert "
+            "(scripts/seed_qdrant_feature_template_docs.py와 동일 소스)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -430,6 +441,26 @@ def main(argv: list[str] | None = None) -> int:
     else:
         try:
             result = apply_seed_upsert(docs, collection_name=args.collection)
+            if args.include_feature_template_docs:
+                from scripts.seed_qdrant_feature_template_docs import (
+                    apply_feature_template_docs_seed,
+                    build_feature_template_docs_seed_documents,
+                )
+
+                ft_docs = build_feature_template_docs_seed_documents()
+                ft_result = apply_feature_template_docs_seed(
+                    ft_docs, collection_name=args.collection
+                )
+                summary["featureTemplateDocsUpsert"] = ft_result
+                summary["featureTemplateDocsCount"] = len(ft_docs)
+                if result.get("ok") and ft_result.get("ok"):
+                    result = {
+                        **result,
+                        "upsertedCount": int(result.get("upsertedCount") or 0)
+                        + int(ft_result.get("upsertedCount") or 0),
+                    }
+                elif not ft_result.get("ok"):
+                    result = {**result, "ok": False, "featureTemplateDocsFailed": True}
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "seed upsert failed errorType=%s message=%s",

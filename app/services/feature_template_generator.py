@@ -130,7 +130,7 @@ class FeatureTemplateGenerator:
         self._llm_service = llm_service or LLMService()
 
     def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateGenerateResult:
-        applied_refs, gen_meta = self._resolve_applied_references(request)
+        request, applied_refs, gen_meta = self._resolve_applied_references(request)
         return self._generate_llm_full_first(
             request,
             applied_refs=applied_refs,
@@ -355,17 +355,55 @@ class FeatureTemplateGenerator:
     @staticmethod
     def _resolve_applied_references(
         request: FeatureTemplateGenerateRequest,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        from app.services.prompt_builder import _extract_rag_references_from_reference_context
+    ) -> tuple[FeatureTemplateGenerateRequest, list[dict[str, Any]], dict[str, Any]]:
+        """Qdrant 자동 retrieval + manual reference 병합 후 appliedReferences를 준비한다."""
+
+        from app.services.prompt_builder import (
+            _extract_rag_references_from_reference_context,
+            build_applied_references_payload,
+            get_initial_generation_skeleton_metadata,
+            select_usable_rag_references,
+        )
+        from app.services.rag_service import (
+            build_feature_template_retrieval_query,
+            merge_manual_and_auto_rag_references,
+            retrieve_feature_template_rag_references,
+        )
 
         skeleton_meta = get_initial_generation_skeleton_metadata()
-        rag_refs = _extract_rag_references_from_reference_context(request.referenceContext)
+        rag_top_k = skeleton_meta["skeletonRagTopK"]
+        manual_refs = _extract_rag_references_from_reference_context(
+            request.referenceContext,
+        )
+
+        query = build_feature_template_retrieval_query(
+            message=None,
+            feature_name=request.featureName,
+            framework=request.framework,
+            language=request.language,
+            level=request.level.value if request.level else None,
+        )
+        retrieval = retrieve_feature_template_rag_references(
+            query=query,
+            top_k=rag_top_k,
+        )
+        merged_refs = merge_manual_and_auto_rag_references(
+            manual_refs,
+            retrieval.references,
+        )
+
+        updated_request = request
+        if merged_refs:
+            updated_ctx = dict(request.referenceContext or {})
+            updated_ctx["ragReferences"] = merged_refs
+            updated_request = request.model_copy(update={"referenceContext": updated_ctx})
+
         selected = select_usable_rag_references(
-            rag_refs,
-            max_items=skeleton_meta["skeletonRagTopK"],
+            merged_refs,
+            max_items=rag_top_k,
         )
         applied = build_applied_references_payload(selected)
-        return applied, skeleton_meta
+        return updated_request, applied, skeleton_meta
 
     @staticmethod
     def is_cacheable_generate_result(result: FeatureTemplateGenerateResult) -> bool:
