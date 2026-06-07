@@ -8,10 +8,31 @@ from typing import Any, Callable
 from app.schemas.feature_template import FeatureTemplateGenerateRequest
 
 __all__ = [
+    "BUCKETS_SKIP_LEGACY_LOGIN_BASELINE",
     "apply_feature_bucket_guards",
     "build_bucket_prompt_constraints",
     "detect_feature_template_bucket",
+    "should_skip_legacy_java_login_baseline",
 ]
+
+LOGIN_BUCKET = "login"
+SIGNUP_BUCKET = "signup"
+CRUD_BUCKET = "crud"
+JWT_AUTH_BUCKET = "jwt_auth"
+GENERIC_BUCKET = "generic"
+
+# login bucket 전용 legacy `_java_spring_code_templates`(AppController/login baseline) 주입을
+# 건너뛰는 bucket. jwt_auth는 AuthController·POST /api/auth/login을 canonical에 포함하며,
+# signup/crud/generic과 legacy login baseline을 공유하지 않는다.
+BUCKETS_SKIP_LEGACY_LOGIN_BASELINE = frozenset(
+    {SIGNUP_BUCKET, CRUD_BUCKET, JWT_AUTH_BUCKET, GENERIC_BUCKET}
+)
+
+
+def should_skip_legacy_java_login_baseline(bucket: str) -> bool:
+    """login bucket이 아닌 bucket guard 대상에서 legacy login baseline 템플릿 주입을 생략."""
+
+    return bucket in BUCKETS_SKIP_LEGACY_LOGIN_BASELINE
 
 _SIGNUP_NAMES = frozenset(
     {"회원가입", "signup", "sign up", "sign-up", "register", "registration", "가입"}
@@ -36,16 +57,16 @@ def detect_feature_template_bucket(
         return "generic"
     fn = raw.lower()
     if fn in _LOGIN_NAMES or raw in ("로그인", "Login"):
-        return "login"
+        return LOGIN_BUCKET
     if fn in _SIGNUP_NAMES or "회원가입" in raw or "signup" in fn or "register" in fn:
-        return "signup"
+        return SIGNUP_BUCKET
     if fn in _CRUD_NAMES or "crud" in fn or "게시글" in raw:
-        return "crud"
+        return CRUD_BUCKET
     if fn in _JWT_NAMES or ("jwt" in fn and "인증" in raw) or fn == "jwt":
-        return "jwt_auth"
+        return JWT_AUTH_BUCKET
     if "jwt" in fn and ("auth" in fn or "인증" in raw or "token" in fn):
-        return "jwt_auth"
-    return "generic"
+        return JWT_AUTH_BUCKET
+    return GENERIC_BUCKET
 
 
 def _java_file_path(package: str, file_name: str) -> str:
@@ -146,19 +167,19 @@ def _content_needs_canonical_replace(content: str, class_name: str, file_name: s
     if declared and declared != class_name:
         return True
     low = content.lower()
-    forbidden = (
-        "appcontroller",
-        "crudcontroller",
-        "jwtcontroller",
-        "/api/auth/login",
-        "@postmapping(\"/login\")",
-        "public responseentity",
-    )
-    if file_name.startswith("Signup") and any(x in low for x in ("/login", "login(", "loginrequest")):
+    if file_name.startswith("Signup") and any(
+        x in low for x in ("/login", "login(", "loginrequest")
+    ):
         return True
-    if file_name.startswith("Post") and any(x in low for x in ("/api/auth/login", "userrepository", "login(")):
+    if file_name.startswith("Post") and any(
+        x in low for x in ("/api/auth/login", "userrepository", "login(")
+    ):
         return True
     if file_name.startswith("Jwt") and "jwtcontroller" in low.replace(" ", ""):
+        return True
+    # AuthController / LoginRequest / LoginResponse (jwt_auth bucket)는
+    # POST /api/auth/login endpoint를 canonical에 포함하므로 여기서 금지하지 않는다.
+    if file_name in ("AppController.java", "CRUDController.java", "JWTController.java"):
         return True
     return False
 
@@ -1547,14 +1568,14 @@ def apply_feature_bucket_guards(
         return
 
     bucket = detect_feature_template_bucket(request.featureName, request.framework)
-    if bucket == "login":
+    if bucket == LOGIN_BUCKET:
         return
 
-    if bucket == "signup":
+    if bucket == SIGNUP_BUCKET:
         _apply_signup_guard(normalized, request, changed_fields)
-    elif bucket == "crud":
+    elif bucket == CRUD_BUCKET:
         _apply_crud_guard(normalized, request, changed_fields)
-    elif bucket == "jwt_auth":
+    elif bucket == JWT_AUTH_BUCKET:
         _apply_jwt_guard(normalized, request, changed_fields)
     else:
         _apply_generic_guard(normalized, request, changed_fields)
@@ -1576,7 +1597,9 @@ _BUCKET_PROMPTS: dict[str, str] = {
     "jwt_auth": (
         "현재 기능 bucket은 jwt_auth입니다.\n"
         "중복 Controller 파일(JWTController 등)을 만들지 마세요.\n"
-        "반드시 JwtTokenProvider, JwtAuthenticationFilter, SecurityConfig, CustomUserDetailsService, AuthController를 분리하세요.\n"
+        "반드시 JwtTokenProvider, JwtAuthenticationFilter, SecurityConfig, CustomUserDetailsService, "
+        "AuthController, LoginRequest, LoginResponse를 분리하세요.\n"
+        "AuthController는 POST /api/auth/login endpoint를 제공하고, 보호 API 예시는 GET /api/users/me 입니다.\n"
         "fileName, filePath, public class명을 일치시키세요."
     ),
     "generic": (
@@ -1589,6 +1612,6 @@ _BUCKET_PROMPTS: dict[str, str] = {
 
 def build_bucket_prompt_constraints(request: FeatureTemplateGenerateRequest) -> str:
     bucket = detect_feature_template_bucket(request.featureName, request.framework)
-    if bucket == "login":
+    if bucket == LOGIN_BUCKET:
         return ""
     return _BUCKET_PROMPTS.get(bucket, _BUCKET_PROMPTS["generic"])

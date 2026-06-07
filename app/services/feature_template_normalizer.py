@@ -2282,20 +2282,23 @@ def _apply_post_normalize_quality(
                     changed_fields,
                 )
             else:
-                from app.services.feature_template_bucket_guards import detect_feature_template_bucket
+                from app.services.feature_template_bucket_guards import (
+                    detect_feature_template_bucket,
+                    should_skip_legacy_java_login_baseline,
+                )
 
                 bucket = detect_feature_template_bucket(
                     request.featureName if request else None,
                     request.framework if request else None,
                 )
-                skip_login_templates = (
+                skip_legacy_login_baseline = (
                     request is not None
                     and _is_java_spring(request)
-                    and bucket in ("signup", "crud", "jwt_auth", "generic")
+                    and should_skip_legacy_java_login_baseline(bucket)
                 )
                 prefix = _java_class_prefix(request)
                 use_java = request is None or request.language.lower() == "java"
-                templates = [] if skip_login_templates else (
+                templates = [] if skip_legacy_login_baseline else (
                     _java_spring_code_templates(prefix) if use_java else []
                 )
                 by_name = {str(t["fileName"]): t for t in templates}

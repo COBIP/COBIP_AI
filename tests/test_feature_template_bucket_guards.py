@@ -228,6 +228,11 @@ class TestJwtBucketGuard:
         assert by["JwtTokenProvider.java"]["role"] == "인증/토큰 Provider"
         assert by["JwtAuthenticationFilter.java"]["role"] == "인증/인가 필터"
         assert by["SecurityConfig.java"]["role"] == "설정 클래스"
+        blob = str(out)
+        assert "/api/auth/login" in blob
+        assert "AuthController.java" in names
+        endpoints = [s.get("endpoint", "") for s in out.get("apiSpec", []) if isinstance(s, dict)]
+        assert "/api/auth/login" in endpoints
         for f in out["codeFiles"]:
             fn = f["fileName"]
             assert f["filePath"].endswith(fn)
@@ -273,6 +278,14 @@ class TestBucketPromptConstraints:
         assert "signup" in prompt
         assert "SignupController" in prompt
         assert "/api/auth/signup" in prompt
+
+    def test_jwt_prompt_allows_login_endpoint(self) -> None:
+        prompt, _, _ = build_feature_template_prompt_with_applied_rags(
+            _req("JWT 인증", includeMissions=False, includeInterview=False)
+        )
+        assert "jwt_auth" in prompt
+        assert "POST /api/auth/login" in prompt
+        assert "GET /api/users/me" in prompt
 
     def test_crud_prompt_has_bucket_constraints(self) -> None:
         prompt, _, _ = build_feature_template_prompt_with_applied_rags(

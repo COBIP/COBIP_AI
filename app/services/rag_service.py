@@ -119,6 +119,8 @@ def rerank_feature_template_rag_references(
 ) -> list[dict[str, Any]]:
     """vector score + featureName/framework/category 일치로 재정렬."""
 
+    from app.services.feature_template_bucket_guards import LOGIN_BUCKET
+
     if not references:
         return []
     if top_k < 1:
@@ -143,7 +145,9 @@ def rerank_feature_template_rag_references(
             bonus += 1.5
         if ref_fn in _GENERAL_FEATURE_NAMES:
             bonus += 0.25
-        elif request_bucket and ref_bucket == "login" and request_bucket != "login":
+        elif request_bucket and ref_bucket == LOGIN_BUCKET and request_bucket != LOGIN_BUCKET:
+            # login bucket 문서가 signup/crud/jwt_auth/generic 검색에 섞이는 것을 완화
+            # (jwt_auth는 AuthController·POST /api/auth/login을 canonical에 포함)
             bonus -= 1.75
         if ref_cat == "feature_template":
             bonus += 0.15
