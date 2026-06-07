@@ -302,6 +302,75 @@ _JWT_FORBIDDEN = ("JWTController", "AppController")
 _JWT_FORBIDDEN_API_ENDPOINTS = ("/api/auth/signup",)
 
 
+def _normalize_api_spec_headers(raw: Any) -> list[dict[str, Any]]:
+    """apiSpec requestHeaders — dict 입력을 schema list 형태로 변환."""
+
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        return [
+            {
+                "name": str(name),
+                "value": str(value) if value is not None else None,
+                "required": True,
+                "description": "",
+            }
+            for name, value in raw.items()
+        ]
+    if isinstance(raw, list):
+        out: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "") or "").strip()
+            if not name:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "value": item.get("value"),
+                    "required": bool(item.get("required", True)),
+                    "description": str(item.get("description", "") or ""),
+                }
+            )
+        return out
+    return []
+
+
+def _normalize_jwt_api_spec_item(
+    source: dict[str, Any] | None,
+    canon: dict[str, Any],
+) -> dict[str, Any]:
+    """JWT apiSpec item을 FeatureTemplateData ApiSpecSchema에 맞게 보정."""
+
+    out = dict(canon)
+    if source:
+        for key, val in source.items():
+            if key == "requestHeaders":
+                continue
+            if val is not None and val != "":
+                out[key] = val
+
+    headers_raw = source.get("requestHeaders") if source else None
+    if headers_raw is not None:
+        normalized = _normalize_api_spec_headers(headers_raw)
+        if normalized:
+            out["requestHeaders"] = normalized
+    out["requestHeaders"] = _normalize_api_spec_headers(out.get("requestHeaders"))
+
+    if not str(out.get("description", "")).strip():
+        out["description"] = str(canon["description"])
+    if out.get("requestBody") is None:
+        out["requestBody"] = canon["requestBody"]
+    if out.get("responseBody") is None:
+        out["responseBody"] = canon["responseBody"]
+    if out.get("status") is None:
+        out["status"] = canon["status"]
+    if not str(out.get("apiName", "")).strip():
+        out["apiName"] = str(canon["apiName"])
+    return out
+
+
 def _sanitize_jwt_api_spec(normalized: dict[str, Any], changed_fields: list[str]) -> None:
     """jwt_auth bucket apiSpec: login + /users/me만 유지, signup endpoint 제거."""
 
@@ -331,11 +400,13 @@ def _sanitize_jwt_api_spec(normalized: dict[str, Any], changed_fields: list[str]
     result: list[dict[str, Any]] = []
     for canon_item in canon:
         key = (canon_item["method"], canon_item["endpoint"])
-        if key in by_key:
-            result.append(by_key[key])
-        else:
-            result.append(dict(canon_item))
+        source = by_key.get(key)
+        merged = _normalize_jwt_api_spec_item(source, canon_item)
+        if source is None:
             changed_fields.append(f"apiSpec[jwt+].{canon_item['endpoint']}")
+        elif merged != source:
+            changed_fields.append(f"apiSpec[jwt~].{canon_item['endpoint']}")
+        result.append(merged)
 
     if result != items:
         changed_fields.append("apiSpec[jwt-canonical]")
@@ -1118,21 +1189,48 @@ def _default_jwt_flow() -> dict[str, Any]:
 def _default_jwt_api_spec() -> list[dict[str, Any]]:
     return [
         {
-            "apiName": "로그인",
+            "apiName": "로그인 API",
             "method": "POST",
             "endpoint": "/api/auth/login",
+            "description": "이메일과 비밀번호를 검증하고 JWT access token을 발급합니다.",
             "authenticationRequired": False,
-            "requestBody": {"email": "u@ex.com", "password": "pw"},
-            "responseBody": {"accessToken": "jwt", "tokenType": "Bearer"},
+            "requestHeaders": [
+                {
+                    "name": "Content-Type",
+                    "value": "application/json",
+                    "required": True,
+                    "description": "JSON 요청 본문",
+                }
+            ],
+            "requestBody": {
+                "email": "user@example.com",
+                "password": "password123",
+            },
+            "responseBody": {
+                "accessToken": "jwt-access-token",
+                "tokenType": "Bearer",
+            },
             "status": 200,
         },
         {
-            "apiName": "내 정보",
+            "apiName": "내 정보 조회",
             "method": "GET",
             "endpoint": "/api/users/me",
+            "description": "Bearer JWT로 인증된 사용자의 정보를 조회합니다.",
             "authenticationRequired": True,
-            "requestHeaders": {"Authorization": "Bearer {accessToken}"},
-            "responseBody": {"email": "u@ex.com"},
+            "requestHeaders": [
+                {
+                    "name": "Authorization",
+                    "value": "Bearer {accessToken}",
+                    "required": True,
+                    "description": "JWT access token",
+                }
+            ],
+            "requestBody": {},
+            "responseBody": {
+                "email": "user@example.com",
+                "nickname": "nick",
+            },
             "status": 200,
         },
     ]

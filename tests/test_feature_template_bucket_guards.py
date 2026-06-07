@@ -451,6 +451,116 @@ class TestJwtBucketGuard:
         assert "AppController" not in blob
         assert "JWTController" not in blob
 
+    def test_jwt_api_spec_schema_compliant_and_validates(self) -> None:
+        """운영 500 재현: description/requestBody 누락·requestHeaders dict → schema 통과."""
+
+        raw = {
+            "overview": {
+                "featureName": "JWT 인증",
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [],
+                "learningGoals": [],
+            },
+            "requirements": [],
+            "flow": {"steps": [], "layers": []},
+            "apiSpec": [
+                {
+                    "apiName": "로그인",
+                    "method": "POST",
+                    "endpoint": "/api/auth/login",
+                    "authenticationRequired": False,
+                    "requestBody": {"email": "u@ex.com", "password": "pw"},
+                    "responseBody": {"accessToken": "jwt", "tokenType": "Bearer"},
+                    "status": 200,
+                },
+                {
+                    "apiName": "회원가입",
+                    "method": "POST",
+                    "endpoint": "/api/auth/signup",
+                    "authenticationRequired": False,
+                },
+                {
+                    "apiName": "내 정보",
+                    "method": "GET",
+                    "endpoint": "/api/users/me",
+                    "authenticationRequired": True,
+                    "requestHeaders": {"Authorization": "Bearer {accessToken}"},
+                    "responseBody": {"email": "u@ex.com"},
+                    "status": 200,
+                },
+            ],
+            "codeFiles": [],
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+        out = FeatureTemplateNormalizer.normalize(
+            raw,
+            _req(
+                "JWT 인증",
+                level=DifficultyLevel.INTERMEDIATE,
+                includeMissions=False,
+                includeInterview=False,
+            ),
+        )
+        FeatureTemplateData(**out)
+
+        endpoints = [s.get("endpoint", "") for s in out.get("apiSpec", []) if isinstance(s, dict)]
+        methods = {
+            (str(s.get("method", "")).upper(), s.get("endpoint", ""))
+            for s in out.get("apiSpec", [])
+            if isinstance(s, dict)
+        }
+        blob = str(out)
+        assert "/api/auth/signup" not in blob
+        assert ("POST", "/api/auth/login") in methods
+        assert ("GET", "/api/users/me") in methods
+        assert len(out["apiSpec"]) == 2
+
+        for item in out["apiSpec"]:
+            assert isinstance(item, dict)
+            assert item.get("description")
+            assert item.get("requestBody") is not None
+            assert item.get("responseBody") is not None
+            headers = item.get("requestHeaders")
+            assert isinstance(headers, list)
+            for header in headers:
+                assert isinstance(header, dict)
+                assert header.get("name")
+
+        login_spec = next(s for s in out["apiSpec"] if s.get("endpoint") == "/api/auth/login")
+        me_spec = next(s for s in out["apiSpec"] if s.get("endpoint") == "/api/users/me")
+        assert login_spec["requestBody"] == {
+            "email": "u@ex.com",
+            "password": "pw",
+        }
+        assert me_spec["requestBody"] == {}
+        assert me_spec["requestHeaders"] == [
+            {
+                "name": "Authorization",
+                "value": "Bearer {accessToken}",
+                "required": True,
+                "description": "",
+            }
+        ]
+
+        names = {f["fileName"] for f in out["codeFiles"]}
+        for req in (
+            "AuthController.java",
+            "JwtTokenProvider.java",
+            "JwtAuthenticationFilter.java",
+            "SecurityConfig.java",
+            "CustomUserDetailsService.java",
+            "LoginRequest.java",
+            "LoginResponse.java",
+        ):
+            assert req in names
+        assert "/api/auth/login" in endpoints
+        assert "/api/users/me" in endpoints
+
 
 class TestGenericBucketGuard:
     def test_unknown_feature_gets_baseline(self) -> None:
