@@ -300,6 +300,43 @@ _CRUD_FORBIDDEN = (
 )
 _JWT_FORBIDDEN = ("JWTController", "AppController")
 _JWT_FORBIDDEN_API_ENDPOINTS = ("/api/auth/signup",)
+_SIGNUP_FORBIDDEN_API_ENDPOINTS = (
+    "/api/auth/login",
+    "/api/users/me",
+    "/api/posts",
+)
+_CRUD_FORBIDDEN_API_ENDPOINTS = (
+    "/api/auth/login",
+    "/api/auth/signup",
+    "/api/users/me",
+)
+_GENERIC_FORBIDDEN_API_ENDPOINTS = (
+    "/api/auth/login",
+    "/api/auth/signup",
+    "/api/users/me",
+    "/api/posts",
+)
+
+
+def _api_spec_key(item: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(item.get("method", "GET") or "GET").upper(),
+        str(item.get("endpoint", "") or "").strip(),
+    )
+
+
+def _endpoint_matches_forbidden(ep: str, forbidden: tuple[str, ...]) -> bool:
+    ep_low = ep.lower()
+    if not ep_low:
+        return True
+    for pattern in forbidden:
+        p = pattern.lower()
+        if p.startswith("/"):
+            if p in ep_low or ep_low.startswith(p.rstrip("/")):
+                return True
+        elif p in ep_low:
+            return True
+    return False
 
 
 def _normalize_api_spec_headers(raw: Any) -> list[dict[str, Any]]:
@@ -337,11 +374,11 @@ def _normalize_api_spec_headers(raw: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _normalize_jwt_api_spec_item(
+def _normalize_api_spec_item(
     source: dict[str, Any] | None,
     canon: dict[str, Any],
 ) -> dict[str, Any]:
-    """JWT apiSpec item을 FeatureTemplateData ApiSpecSchema에 맞게 보정."""
+    """apiSpec item을 FeatureTemplateData ApiSpecSchema에 맞게 보정."""
 
     out = dict(canon)
     if source:
@@ -359,57 +396,164 @@ def _normalize_jwt_api_spec_item(
     out["requestHeaders"] = _normalize_api_spec_headers(out.get("requestHeaders"))
 
     if not str(out.get("description", "")).strip():
-        out["description"] = str(canon["description"])
-    if out.get("requestBody") is None:
-        out["requestBody"] = canon["requestBody"]
-    if out.get("responseBody") is None:
-        out["responseBody"] = canon["responseBody"]
-    if out.get("status") is None:
-        out["status"] = canon["status"]
+        out["description"] = str(canon.get("description", ""))
     if not str(out.get("apiName", "")).strip():
-        out["apiName"] = str(canon["apiName"])
+        out["apiName"] = str(canon.get("apiName", ""))
+    if not str(out.get("method", "")).strip():
+        out["method"] = str(canon.get("method", "GET"))
+    if not str(out.get("endpoint", "")).strip():
+        out["endpoint"] = str(canon.get("endpoint", ""))
+    if out.get("requestBody") is None:
+        out["requestBody"] = canon.get("requestBody", {})
+    if out.get("responseBody") is None:
+        out["responseBody"] = canon.get("responseBody", {})
+    if out.get("status") is None:
+        out["status"] = canon.get("status", 200)
+    if out.get("authenticationRequired") is None:
+        out["authenticationRequired"] = bool(canon.get("authenticationRequired", False))
     return out
 
 
-def _sanitize_jwt_api_spec(normalized: dict[str, Any], changed_fields: list[str]) -> None:
-    """jwt_auth bucket apiSpec: login + /users/me만 유지, signup endpoint 제거."""
+def _normalize_jwt_api_spec_item(
+    source: dict[str, Any] | None,
+    canon: dict[str, Any],
+) -> dict[str, Any]:
+    """JWT apiSpec item schema 보정 (공통 normalizer 위임)."""
 
-    canon = _default_jwt_api_spec()
+    return _normalize_api_spec_item(source, canon)
+
+
+def _sanitize_bucket_api_spec(
+    normalized: dict[str, Any],
+    canon: list[dict[str, Any]],
+    *,
+    forbidden_endpoint_substrings: tuple[str, ...],
+    changed_fields: list[str],
+    tag: str,
+) -> None:
+    """bucket canonical apiSpec만 deterministic하게 유지."""
+
     items = normalized.get("apiSpec")
     if not isinstance(items, list):
         items = []
 
-    kept: list[dict[str, Any]] = []
+    allowed_keys = {_api_spec_key(c) for c in canon}
+    kept: dict[tuple[str, str], dict[str, Any]] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
         ep = str(item.get("endpoint", "") or "").strip()
-        ep_low = ep.lower()
-        if any(f in ep_low for f in _JWT_FORBIDDEN_API_ENDPOINTS) or "signup" in ep_low:
-            changed_fields.append(f"apiSpec[jwt-drop].{ep or 'unknown'}")
+        key = _api_spec_key(item)
+        if _endpoint_matches_forbidden(ep, forbidden_endpoint_substrings):
+            changed_fields.append(f"apiSpec[{tag}-drop].{ep or 'unknown'}")
             continue
-        kept.append(item)
-
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for item in kept:
-        method = str(item.get("method", "GET") or "GET").upper()
-        ep = str(item.get("endpoint", "") or "").strip()
-        if ep:
-            by_key[(method, ep)] = item
+        if key not in allowed_keys:
+            changed_fields.append(f"apiSpec[{tag}-drop-extra].{ep or 'unknown'}")
+            continue
+        kept[key] = item
 
     result: list[dict[str, Any]] = []
     for canon_item in canon:
-        key = (canon_item["method"], canon_item["endpoint"])
-        source = by_key.get(key)
-        merged = _normalize_jwt_api_spec_item(source, canon_item)
+        key = _api_spec_key(canon_item)
+        source = kept.get(key)
+        merged = _normalize_api_spec_item(source, canon_item)
         if source is None:
-            changed_fields.append(f"apiSpec[jwt+].{canon_item['endpoint']}")
+            changed_fields.append(f"apiSpec[{tag}+].{canon_item['endpoint']}")
         elif merged != source:
-            changed_fields.append(f"apiSpec[jwt~].{canon_item['endpoint']}")
+            changed_fields.append(f"apiSpec[{tag}~].{canon_item['endpoint']}")
         result.append(merged)
 
     if result != items:
-        changed_fields.append("apiSpec[jwt-canonical]")
+        changed_fields.append(f"apiSpec[{tag}-canonical]")
+    normalized["apiSpec"] = result
+
+
+def _sanitize_signup_api_spec(normalized: dict[str, Any], changed_fields: list[str]) -> None:
+    _sanitize_bucket_api_spec(
+        normalized,
+        _default_signup_api_spec(),
+        forbidden_endpoint_substrings=_SIGNUP_FORBIDDEN_API_ENDPOINTS,
+        changed_fields=changed_fields,
+        tag="signup",
+    )
+
+
+def _sanitize_crud_api_spec(normalized: dict[str, Any], changed_fields: list[str]) -> None:
+    _sanitize_bucket_api_spec(
+        normalized,
+        _default_crud_api_spec(),
+        forbidden_endpoint_substrings=_CRUD_FORBIDDEN_API_ENDPOINTS,
+        changed_fields=changed_fields,
+        tag="crud",
+    )
+
+
+def _sanitize_jwt_api_spec(normalized: dict[str, Any], changed_fields: list[str]) -> None:
+    _sanitize_bucket_api_spec(
+        normalized,
+        _default_jwt_api_spec(),
+        forbidden_endpoint_substrings=_JWT_FORBIDDEN_API_ENDPOINTS + ("signup",),
+        changed_fields=changed_fields,
+        tag="jwt",
+    )
+
+
+def _default_generic_api_spec_item(feature_name: str) -> dict[str, Any]:
+    fn = feature_name or "기능"
+    endpoint = _generic_api_endpoint(fn)
+    return {
+        "apiName": fn,
+        "method": "POST",
+        "endpoint": endpoint,
+        "description": f"{fn} 기능 API",
+        "authenticationRequired": False,
+        "requestHeaders": [
+            {
+                "name": "Content-Type",
+                "value": "application/json",
+                "required": True,
+                "description": "JSON 요청 본문",
+            }
+        ],
+        "requestBody": {},
+        "responseBody": {},
+        "status": 200,
+    }
+
+
+def _sanitize_generic_api_spec(
+    normalized: dict[str, Any],
+    request: FeatureTemplateGenerateRequest,
+    changed_fields: list[str],
+) -> None:
+    """generic bucket: 다른 bucket endpoint 혼입 제거 + schema 보정."""
+
+    fn = request.featureName or "기능"
+    default_item = _default_generic_api_spec_item(fn)
+    items = normalized.get("apiSpec")
+    if not isinstance(items, list):
+        items = []
+
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ep = str(item.get("endpoint", "") or "").strip()
+        if _endpoint_matches_forbidden(ep, _GENERIC_FORBIDDEN_API_ENDPOINTS):
+            changed_fields.append(f"apiSpec[generic-drop].{ep or 'unknown'}")
+            continue
+        key = _api_spec_key(item)
+        if key in seen:
+            changed_fields.append(f"apiSpec[generic-drop-dup].{ep or 'unknown'}")
+            continue
+        seen.add(key)
+        result.append(_normalize_api_spec_item(item, default_item))
+
+    if not result:
+        result = [_normalize_api_spec_item(None, default_item)]
+        changed_fields.append("apiSpec[generic-default]")
+
     normalized["apiSpec"] = result
 
 
@@ -644,6 +788,14 @@ def _default_signup_api_spec() -> list[dict[str, Any]]:
             "endpoint": "/api/auth/signup",
             "description": "email/password/nickname으로 회원 가입",
             "authenticationRequired": False,
+            "requestHeaders": [
+                {
+                    "name": "Content-Type",
+                    "value": "application/json",
+                    "required": True,
+                    "description": "JSON 요청 본문",
+                }
+            ],
             "requestBody": {"email": "user@example.com", "password": "secret", "nickname": "nick"},
             "responseBody": {
                 "success": True,
@@ -916,6 +1068,16 @@ def _default_crud_api_spec() -> list[dict[str, Any]]:
     ]
     out = []
     for method, endpoint, status in endpoints:
+        headers: list[dict[str, Any]] = []
+        if method in ("POST", "PUT"):
+            headers = [
+                {
+                    "name": "Content-Type",
+                    "value": "application/json",
+                    "required": True,
+                    "description": "JSON 요청 본문",
+                }
+            ]
         out.append(
             {
                 "apiName": f"게시글 {method}",
@@ -923,6 +1085,7 @@ def _default_crud_api_spec() -> list[dict[str, Any]]:
                 "endpoint": endpoint,
                 "description": f"게시글 CRUD — {method} {endpoint}",
                 "authenticationRequired": False,
+                "requestHeaders": headers,
                 "requestBody": {"title": "제목", "content": "내용"} if method in ("POST", "PUT") else {},
                 "responseBody": {"id": 1, "title": "제목", "content": "내용"},
                 "status": status,
@@ -1445,6 +1608,7 @@ def _apply_signup_guard(
     _ensure_list_section(normalized, "requirements", _default_signup_requirements, 3, changed_fields)
     _ensure_flow(normalized, _default_signup_flow, changed_fields)
     _ensure_list_section(normalized, "apiSpec", _default_signup_api_spec, 1, changed_fields)
+    _sanitize_signup_api_spec(normalized, changed_fields)
     if request.includeMissions and (
         not isinstance(normalized.get("missions"), list) or len(normalized["missions"]) < 2
     ):
@@ -1561,6 +1725,7 @@ def _apply_crud_guard(
     _ensure_list_section(normalized, "requirements", _default_crud_requirements, 5, changed_fields)
     _ensure_flow(normalized, _default_crud_flow, changed_fields)
     _ensure_list_section(normalized, "apiSpec", _default_crud_api_spec, 5, changed_fields)
+    _sanitize_crud_api_spec(normalized, changed_fields)
     bq = normalized.get("basicQuestions")
     if not isinstance(bq, list) or len(bq) < 3:
         normalized["basicQuestions"] = [
@@ -1732,20 +1897,11 @@ def _apply_generic_guard(
     _ensure_list_section(
         normalized,
         "apiSpec",
-        lambda: [
-            {
-                "apiName": fn,
-                "method": "POST",
-                "endpoint": _generic_api_endpoint(fn),
-                "description": fn,
-                "requestBody": {},
-                "responseBody": {},
-                "status": 200,
-            }
-        ],
+        lambda: [_default_generic_api_spec_item(fn)],
         1,
         changed_fields,
     )
+    _sanitize_generic_api_spec(normalized, request, changed_fields)
     if request.includeCode:
         canon = _canonical_generic_codefiles(fn)
         _merge_required_codefiles(
@@ -1754,6 +1910,8 @@ def _apply_generic_guard(
             canonical=canon,
             default_pkg="com.example.app",
             changed_fields=changed_fields,
+            drop_patterns=("AppController", "CRUDController", "JWTController", "LoginController"),
+            canonical_only=True,
         )
 
 
