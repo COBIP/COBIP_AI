@@ -262,6 +262,8 @@ def _is_login_feature_request(request: FeatureTemplateGenerateRequest | None) ->
 
 
 _LOGIN_PKG_DEFAULT = "com.example.auth"
+_LOGIN_CANONICAL_ENDPOINT = "/api/auth/login"
+_LOGIN_CANONICAL_ENDPOINT_WITH_METHOD = "POST /api/auth/login"
 _LOGIN_REQUIRED_FILES: tuple[str, ...] = (
     "LoginController.java",
     "LoginService.java",
@@ -289,6 +291,251 @@ def _extract_java_package(content: str) -> str | None:
 def _java_file_path_for(package: str, basename: str) -> str:
     rel = package.replace(".", "/") + "/" + basename
     return f"src/main/java/{rel}"
+
+
+def _scrub_login_endpoint_placeholders_in_text(text: str) -> str:
+    """로그인 템플릿 문자열 내 generic endpoint placeholder를 canonical로 치환."""
+
+    if not text or not isinstance(text, str):
+        return text
+    out = text
+    replacements = (
+        ("POST /api/feature", _LOGIN_CANONICAL_ENDPOINT_WITH_METHOD),
+        ("post /api/feature", _LOGIN_CANONICAL_ENDPOINT_WITH_METHOD),
+        ("Post /api/feature", _LOGIN_CANONICAL_ENDPOINT_WITH_METHOD),
+        ("/api/feature", _LOGIN_CANONICAL_ENDPOINT),
+        ("/api/example", _LOGIN_CANONICAL_ENDPOINT),
+        ("POST /api/login", _LOGIN_CANONICAL_ENDPOINT_WITH_METHOD),
+        ("post /api/login", _LOGIN_CANONICAL_ENDPOINT_WITH_METHOD),
+    )
+    for old, new in replacements:
+        if old in out:
+            out = out.replace(old, new)
+    return out
+
+
+def _scrub_login_endpoint_placeholders_in_payload(
+    normalized: dict[str, Any],
+    changed_fields: list[str],
+) -> None:
+    """requirements/flow/basicQuestions/missions/interviewQuestions 텍스트 endpoint 보정."""
+
+    req_fields = (
+        "description",
+        "inputValue",
+        "processCondition",
+        "successResult",
+        "failureResult",
+        "relatedScreenOrApi",
+    )
+    reqs = normalized.get("requirements")
+    if isinstance(reqs, list):
+        for index, item in enumerate(reqs):
+            if not isinstance(item, dict):
+                continue
+            for field in req_fields:
+                val = item.get(field)
+                if not isinstance(val, str):
+                    continue
+                fixed = _scrub_login_endpoint_placeholders_in_text(val)
+                if fixed != val:
+                    item[field] = fixed
+                    changed_fields.append(f"requirements[{index}].{field}[endpoint-scrub]")
+
+    flow = normalized.get("flow")
+    if isinstance(flow, dict):
+        steps = flow.get("steps")
+        if isinstance(steps, list):
+            new_steps: list[str] = []
+            for index, step in enumerate(steps):
+                text = _coerce_to_string(step)
+                fixed = _scrub_login_endpoint_placeholders_in_text(text)
+                if fixed != text:
+                    changed_fields.append(f"flow.steps[{index}][endpoint-scrub]")
+                new_steps.append(fixed)
+            flow["steps"] = new_steps
+
+    for section, str_fields in (
+        ("basicQuestions", ("question", "answer", "explanation")),
+        ("interviewQuestions", ("question", "sampleAnswer")),
+    ):
+        items = normalized.get(section)
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            for field in str_fields:
+                val = item.get(field)
+                if not isinstance(val, str):
+                    continue
+                fixed = _scrub_login_endpoint_placeholders_in_text(val)
+                if fixed != val:
+                    item[field] = fixed
+                    changed_fields.append(f"{section}[{index}].{field}[endpoint-scrub]")
+            if section == "interviewQuestions":
+                kps = item.get("keyPoints")
+                if isinstance(kps, list):
+                    fixed_kps: list[str] = []
+                    for kp_index, kp in enumerate(kps):
+                        text = _coerce_to_string(kp)
+                        fixed = _scrub_login_endpoint_placeholders_in_text(text)
+                        if fixed != text:
+                            changed_fields.append(
+                                f"interviewQuestions[{index}].keyPoints[{kp_index}][endpoint-scrub]"
+                            )
+                        fixed_kps.append(fixed)
+                    item["keyPoints"] = fixed_kps
+
+    missions = normalized.get("missions")
+    if isinstance(missions, list):
+        for index, item in enumerate(missions):
+            if not isinstance(item, dict):
+                continue
+            for field in ("title", "description"):
+                val = item.get(field)
+                if isinstance(val, str):
+                    fixed = _scrub_login_endpoint_placeholders_in_text(val)
+                    if fixed != val:
+                        item[field] = fixed
+                        changed_fields.append(f"missions[{index}].{field}[endpoint-scrub]")
+            for list_field in ("requirements", "successCriteria"):
+                values = item.get(list_field)
+                if not isinstance(values, list):
+                    continue
+                fixed_list: list[str] = []
+                for li, raw in enumerate(values):
+                    text = _coerce_to_string(raw)
+                    fixed = _scrub_login_endpoint_placeholders_in_text(text)
+                    if fixed != text:
+                        changed_fields.append(
+                            f"missions[{index}].{list_field}[{li}][endpoint-scrub]"
+                        )
+                    fixed_list.append(fixed)
+                item[list_field] = fixed_list
+
+
+def _infer_java_code_file_role(file_name: str) -> str | None:
+    bn = _basename_java_filename(file_name)
+    role_map: tuple[tuple[str, str], ...] = (
+        ("Controller.java", "REST API 컨트롤러"),
+        ("Service.java", "비즈니스 로직 서비스"),
+        ("Request.java", "요청 DTO"),
+        ("Response.java", "응답 DTO"),
+        ("Repository.java", "데이터 접근 Repository"),
+        ("Entity.java", "JPA Entity"),
+        ("Config.java", "설정 클래스"),
+        ("Filter.java", "인증/인가 필터"),
+    )
+    for suffix, role in role_map:
+        if bn.endswith(suffix):
+            return role
+    return None
+
+
+def _normalize_java_package_in_content(content: str, package: str) -> str:
+    if not content:
+        return content
+    out = re.sub(
+        r"^\s*package\s+[\w.]+\s*;",
+        f"package {package};",
+        content,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    for alt_pkg in ("com.example.login", "com.example.auth"):
+        if alt_pkg != package:
+            out = out.replace(alt_pkg, package)
+    return out
+
+
+def _normalize_login_dto_accessor_consistency(content: str) -> str:
+    """class DTO + record-style accessor 혼용을 getter 호출로 통일."""
+
+    if not content:
+        return content
+    replacements = (
+        (r"\brequest\.username\(\)", "request.getUsername()"),
+        (r"\brequest\.password\(\)", "request.getPassword()"),
+        (r"\bbody\.username\(\)", "body.getUsername()"),
+        (r"\bbody\.password\(\)", "body.getPassword()"),
+        (r"\bloginRequest\.username\(\)", "loginRequest.getUsername()"),
+        (r"\bloginRequest\.password\(\)", "loginRequest.getPassword()"),
+    )
+    out = content
+    for pattern, repl in replacements:
+        out = re.sub(pattern, repl, out)
+    return out
+
+
+def _normalize_login_code_file_roles(
+    files: list[dict[str, Any]],
+    changed_fields: list[str],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for index, raw in enumerate(files):
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        fn = str(item.get("fileName", "") or "")
+        inferred = _infer_java_code_file_role(fn)
+        if inferred and item.get("role") != inferred:
+            item["role"] = inferred
+            changed_fields.append(f"codeFiles[{index}].role")
+        out.append(item)
+    return out
+
+
+def _unify_login_java_codefiles_package(
+    files: list[dict[str, Any]],
+    package: str,
+    changed_fields: list[str],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for index, raw in enumerate(files):
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        fn = _basename_java_filename(str(item.get("fileName", "") or ""))
+        if not fn.endswith(".java"):
+            out.append(item)
+            continue
+        content = item.get("content", "")
+        cstr = content if isinstance(content, str) else _coerce_to_string(content)
+        fixed = _normalize_java_package_in_content(cstr, package)
+        fixed = _normalize_login_dto_accessor_consistency(fixed)
+        if fixed != cstr:
+            changed_fields.append(f"codeFiles[{index}].content[package-dto]")
+        item["fileName"] = fn
+        item["filePath"] = _java_file_path_for(package, fn)
+        item["language"] = "java"
+        item["content"] = fixed
+        out.append(item)
+    return out
+
+
+def _apply_spring_boot_login_quality_guard(
+    normalized: dict[str, Any],
+    request: FeatureTemplateGenerateRequest | None,
+    changed_fields: list[str],
+) -> None:
+    """로그인 + Spring Boot LLM/fallback 공통 품질 guard."""
+
+    if request is None or not _is_java_spring(request) or not _is_login_feature_request(request):
+        return
+
+    _scrub_login_endpoint_placeholders_in_payload(normalized, changed_fields)
+
+    if not request.includeCode:
+        return
+
+    files = normalized.get("codeFiles")
+    if not isinstance(files, list):
+        return
+
+    files = _unify_login_java_codefiles_package(files, _LOGIN_PKG_DEFAULT, changed_fields)
+    files = _normalize_login_code_file_roles(files, changed_fields)
+    normalized["codeFiles"] = files
 
 
 def _java_declares_type(content: str, type_name: str) -> bool:
@@ -327,21 +574,31 @@ def _login_service_content_valid(content: str) -> bool:
         return False
     if "@RequestMapping" in content or "@PostMapping" in content or "@GetMapping" in content:
         return False
+    has_request_access = (
+        "request.getUsername()" in content
+        or "request.getPassword()" in content
+        or "request.username()" in content
+        or "request.password()" in content
+    )
     return (
         "class LoginService" in content
         and "@Service" in content
         and "LoginResponse" in content
         and "login" in content
         and "LoginRequest" in content
+        and has_request_access
     )
 
 
 def _login_request_content_valid(content: str) -> bool:
     if _contains_placeholder(content):
         return False
-    return ("record LoginRequest" in content or "class LoginRequest" in content) and (
-        "username" in content and "password" in content
-    )
+    has_type = "record LoginRequest" in content or "class LoginRequest" in content
+    has_username = "username" in content
+    has_password = "password" in content
+    if "class LoginRequest" in content:
+        return has_type and has_username and has_password and "getUsername" in content
+    return has_type and has_username and has_password
 
 
 def _login_response_content_valid(content: str) -> bool:
@@ -364,7 +621,7 @@ def _canonical_login_spring_four() -> dict[str, dict[str, Any]]:
         "LoginController.java": {
             "fileName": "LoginController.java",
             "filePath": _java_file_path_for(pkg, "LoginController.java"),
-            "role": "REST API 엔드포인트",
+            "role": "REST API 컨트롤러",
             "language": "java",
             "content": f"""package {pkg};
 
@@ -394,7 +651,7 @@ public class LoginController {{
         "LoginService.java": {
             "fileName": "LoginService.java",
             "filePath": _java_file_path_for(pkg, "LoginService.java"),
-            "role": "비즈니스 로직",
+            "role": "비즈니스 로직 서비스",
             "language": "java",
             "content": f"""package {pkg};
 
@@ -404,8 +661,8 @@ import org.springframework.stereotype.Service;
 public class LoginService {{
 
     public LoginResponse login(LoginRequest request) {{
-        String username = request.username();
-        String password = request.password();
+        String username = request.getUsername();
+        String password = request.getPassword();
         if (username == null || username.isBlank()) {{
             throw new IllegalArgumentException("username required");
         }}
@@ -430,7 +687,25 @@ public class LoginService {{
             "language": "java",
             "content": f"""package {pkg};
 
-public record LoginRequest(String username, String password) {{
+public class LoginRequest {{
+    private String username;
+    private String password;
+
+    public String getUsername() {{
+        return username;
+    }}
+
+    public void setUsername(String username) {{
+        this.username = username;
+    }}
+
+    public String getPassword() {{
+        return password;
+    }}
+
+    public void setPassword(String password) {{
+        this.password = password;
+    }}
 }}
 """,
         },
@@ -441,7 +716,28 @@ public record LoginRequest(String username, String password) {{
             "language": "java",
             "content": f"""package {pkg};
 
-public record LoginResponse(String accessToken, String tokenType, String username) {{
+public class LoginResponse {{
+    private String accessToken;
+    private String tokenType;
+    private String username;
+
+    public LoginResponse(String accessToken, String tokenType, String username) {{
+        this.accessToken = accessToken;
+        this.tokenType = tokenType;
+        this.username = username;
+    }}
+
+    public String getAccessToken() {{
+        return accessToken;
+    }}
+
+    public String getTokenType() {{
+        return tokenType;
+    }}
+
+    public String getUsername() {{
+        return username;
+    }}
 }}
 """,
         },
@@ -1403,11 +1699,15 @@ def _ensure_final_login_defense(
         fixed = dict(it)
         content = fixed.get("content", "")
         cs = content if isinstance(content, str) else _coerce_to_string(content)
-        pkg = _extract_java_package(cs) or _LOGIN_PKG_DEFAULT
+        cs = _normalize_java_package_in_content(cs, _LOGIN_PKG_DEFAULT)
+        cs = _normalize_login_dto_accessor_consistency(cs)
         fixed["fileName"] = bn
-        fixed["filePath"] = _java_file_path_for(pkg, bn)
+        fixed["filePath"] = _java_file_path_for(_LOGIN_PKG_DEFAULT, bn)
         fixed["language"] = "java"
         fixed["content"] = cs
+        inferred_role = _infer_java_code_file_role(bn)
+        if inferred_role:
+            fixed["role"] = inferred_role
         merged[bn] = fixed
 
     for req_fn in _LOGIN_REQUIRED_FILES:
@@ -1435,11 +1735,15 @@ def _ensure_final_login_defense(
             continue
         c2 = d.get("content", "")
         c2s = c2 if isinstance(c2, str) else _coerce_to_string(c2)
-        pkg2 = _extract_java_package(c2s) or _LOGIN_PKG_DEFAULT
+        c2s = _normalize_java_package_in_content(c2s, _LOGIN_PKG_DEFAULT)
+        c2s = _normalize_login_dto_accessor_consistency(c2s)
         d["fileName"] = bn2
-        d["filePath"] = _java_file_path_for(pkg2, bn2)
+        d["filePath"] = _java_file_path_for(_LOGIN_PKG_DEFAULT, bn2)
         d["language"] = "java"
         d["content"] = c2s
+        inferred_role = _infer_java_code_file_role(bn2)
+        if inferred_role:
+            d["role"] = inferred_role
         by_bn[bn2] = d
 
     for req_fn in _LOGIN_REQUIRED_FILES:
@@ -1458,8 +1762,7 @@ def _ensure_final_login_defense(
             it["fileName"] = _basename_java_filename(fn)
             c3 = it.get("content", "")
             c3s = c3 if isinstance(c3, str) else _coerce_to_string(c3)
-            pkg3 = _extract_java_package(c3s) or _LOGIN_PKG_DEFAULT
-            it["filePath"] = _java_file_path_for(pkg3, it["fileName"])
+            it["filePath"] = _java_file_path_for(_LOGIN_PKG_DEFAULT, it["fileName"])
             changed_fields.append("codeFiles[final3].fileName")
 
     normalized["codeFiles"] = final_out
@@ -2294,6 +2597,7 @@ def normalize_feature_template_payload(
         normalized[section] = normalized_items
 
     _apply_post_normalize_quality(normalized, request, changed_fields)
+    _apply_spring_boot_login_quality_guard(normalized, request, changed_fields)
     _ensure_final_login_defense(normalized, request, changed_fields)
 
     if changed_fields:

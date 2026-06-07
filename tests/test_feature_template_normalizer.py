@@ -441,7 +441,7 @@ def test_codefile_basename_strips_path(sample_request: FeatureTemplateGenerateRe
     FeatureTemplateData(**out)
 
 
-def test_codefile_filepath_matches_custom_package(sample_request: FeatureTemplateGenerateRequest) -> None:
+def test_login_codefile_package_unified_to_auth(sample_request: FeatureTemplateGenerateRequest) -> None:
     raw = {
         "codeFiles": [
             {
@@ -454,7 +454,8 @@ def test_codefile_filepath_matches_custom_package(sample_request: FeatureTemplat
     }
     out = FeatureTemplateNormalizer.normalize(raw, sample_request)
     lr = next(f for f in out["codeFiles"] if f["fileName"] == "LoginRequest.java")
-    assert "com/example/demo/LoginRequest.java" in lr["filePath"].replace("\\", "/")
+    assert "com/example/auth/LoginRequest.java" in lr["filePath"].replace("\\", "/")
+    assert "package com.example.auth;" in lr["content"]
     FeatureTemplateData(**out)
 
 
@@ -489,8 +490,9 @@ def test_login_canonical_files_declare_matching_types(sample_request: FeatureTem
     by = {f["fileName"]: f["content"] for f in out["codeFiles"]}
     assert "class LoginController" in by["LoginController.java"]
     assert "class LoginService" in by["LoginService.java"]
-    assert "record LoginRequest" in by["LoginRequest.java"]
-    assert "record LoginResponse" in by["LoginResponse.java"]
+    assert "class LoginRequest" in by["LoginRequest.java"]
+    assert "getUsername()" in by["LoginRequest.java"]
+    assert "class LoginResponse" in by["LoginResponse.java"]
 
 
 def test_login_codefiles_no_placeholders_and_no_source_key(sample_request: FeatureTemplateGenerateRequest) -> None:
