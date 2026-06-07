@@ -51,6 +51,75 @@ public class AppController {
     ]
 
 
+def _crud_junk_module_codefiles() -> list[dict]:
+    junk = []
+    for i in range(3):
+        junk.append(
+            {
+                "fileName": f"module_{i}.py.java",
+                "filePath": f"src/main/java/com/example/post/module_{i}.py.java",
+                "role": "데이터 접근",
+                "language": "java",
+                "content": f"public class module_{i} {{}}",
+            }
+        )
+    return junk
+
+
+def _crud_canonical_codefiles() -> list[dict]:
+    return [
+        {
+            "fileName": "PostController.java",
+            "filePath": "src/main/java/com/example/post/PostController.java",
+            "role": "REST API 컨트롤러",
+            "language": "java",
+            "content": "package com.example.post;\npublic class PostController {}",
+        },
+        {
+            "fileName": "PostService.java",
+            "filePath": "src/main/java/com/example/post/PostService.java",
+            "role": "비즈니스 로직 서비스",
+            "language": "java",
+            "content": "package com.example.post;\npublic class PostService {}",
+        },
+        {
+            "fileName": "PostRepository.java",
+            "filePath": "src/main/java/com/example/post/PostRepository.java",
+            "role": "데이터 접근 Repository",
+            "language": "java",
+            "content": "package com.example.post;\npublic interface PostRepository {}",
+        },
+        {
+            "fileName": "Post.java",
+            "filePath": "src/main/java/com/example/post/Post.java",
+            "role": "엔티티",
+            "language": "java",
+            "content": "package com.example.post;\npublic class Post {}",
+        },
+        {
+            "fileName": "PostCreateRequest.java",
+            "filePath": "src/main/java/com/example/post/PostCreateRequest.java",
+            "role": "요청 DTO",
+            "language": "java",
+            "content": "package com.example.post;\npublic class PostCreateRequest {}",
+        },
+        {
+            "fileName": "PostUpdateRequest.java",
+            "filePath": "src/main/java/com/example/post/PostUpdateRequest.java",
+            "role": "요청 DTO",
+            "language": "java",
+            "content": "package com.example.post;\npublic class PostUpdateRequest {}",
+        },
+        {
+            "fileName": "PostResponse.java",
+            "filePath": "src/main/java/com/example/post/PostResponse.java",
+            "role": "응답 DTO",
+            "language": "java",
+            "content": "package com.example.post;\npublic class PostResponse {}",
+        },
+    ]
+
+
 class TestBucketDetection:
     @pytest.mark.parametrize(
         "name,expected",
@@ -166,6 +235,56 @@ class TestCrudBucketGuard:
         assert by["PostRepository.java"] == "데이터 접근 Repository"
         assert by["PostCreateRequest.java"] == "요청 DTO"
 
+    def test_crud_strips_module_py_java_junk(self) -> None:
+        raw = {
+            "overview": {
+                "featureName": "게시글 CRUD",
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [],
+                "learningGoals": [],
+            },
+            "requirements": [],
+            "flow": {"steps": [], "layers": []},
+            "apiSpec": [
+                {"method": "POST", "endpoint": "/api/posts"},
+                {"method": "GET", "endpoint": "/api/posts"},
+                {"method": "GET", "endpoint": "/api/posts/{postId}"},
+                {"method": "PUT", "endpoint": "/api/posts/{postId}"},
+                {"method": "DELETE", "endpoint": "/api/posts/{postId}"},
+            ],
+            "codeFiles": _crud_canonical_codefiles() + _crud_junk_module_codefiles(),
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+        out = FeatureTemplateNormalizer.normalize(
+            raw, _req("게시글 CRUD", includeMissions=False, includeInterview=False)
+        )
+        names = {f["fileName"] for f in out["codeFiles"]}
+        assert len(out["codeFiles"]) == 7
+        for req in (
+            "PostController.java",
+            "PostService.java",
+            "PostRepository.java",
+            "Post.java",
+            "PostCreateRequest.java",
+            "PostUpdateRequest.java",
+            "PostResponse.java",
+        ):
+            assert req in names
+        blob = str(out)
+        assert "module_" not in blob
+        assert ".py.java" not in blob
+        assert "AppController" not in blob
+        assert "CRUDController" not in blob
+        assert "/api/auth/login" not in blob
+        endpoints = [s.get("endpoint", "") for s in out.get("apiSpec", []) if isinstance(s, dict)]
+        assert endpoints.count("/api/posts") >= 1
+        assert len(endpoints) >= 5
+
 
 class TestJwtBucketGuard:
     def test_jwt_mismatched_files_corrected(self) -> None:
@@ -239,6 +358,99 @@ class TestJwtBucketGuard:
             cls = fn[:-5]
             assert f"class {cls}" in f["content"] or f"interface {cls}" in f["content"]
 
+    def test_jwt_strips_signup_endpoint_and_keeps_canonical_api(self) -> None:
+        raw = {
+            "overview": {
+                "featureName": "JWT 인증",
+                "purpose": "",
+                "useCases": [],
+                "resultDescription": "",
+                "techStack": [],
+                "learningGoals": [],
+            },
+            "requirements": [],
+            "flow": {"steps": [], "layers": []},
+            "apiSpec": [
+                {
+                    "apiName": "로그인",
+                    "method": "POST",
+                    "endpoint": "/api/auth/login",
+                    "authenticationRequired": False,
+                },
+                {
+                    "apiName": "회원가입",
+                    "method": "POST",
+                    "endpoint": "/api/auth/signup",
+                    "authenticationRequired": False,
+                },
+            ],
+            "codeFiles": [
+                {
+                    "fileName": "JwtTokenProvider.java",
+                    "filePath": "src/main/java/com/example/security/JwtTokenProvider.java",
+                    "role": "인증/토큰 Provider",
+                    "language": "java",
+                    "content": "package com.example.security;\npublic class JwtTokenProvider {}",
+                },
+                {
+                    "fileName": "JwtAuthenticationFilter.java",
+                    "filePath": "src/main/java/com/example/security/JwtAuthenticationFilter.java",
+                    "role": "인증/인가 필터",
+                    "language": "java",
+                    "content": "package com.example.security;\npublic class JwtAuthenticationFilter {}",
+                },
+                {
+                    "fileName": "SecurityConfig.java",
+                    "filePath": "src/main/java/com/example/security/SecurityConfig.java",
+                    "role": "설정 클래스",
+                    "language": "java",
+                    "content": "package com.example.security;\npublic class SecurityConfig {}",
+                },
+                {
+                    "fileName": "AuthController.java",
+                    "filePath": "src/main/java/com/example/security/AuthController.java",
+                    "role": "REST API 컨트롤러",
+                    "language": "java",
+                    "content": 'package com.example.security;\n@PostMapping("/api/auth/login")\npublic class AuthController {}',
+                },
+            ],
+            "basicQuestions": [],
+            "missions": [],
+            "interviewQuestions": [],
+            "nextRecommendations": [],
+        }
+        out = FeatureTemplateNormalizer.normalize(
+            raw,
+            _req(
+                "JWT 인증",
+                level=DifficultyLevel.INTERMEDIATE,
+                includeMissions=False,
+                includeInterview=False,
+            ),
+        )
+        names = {f["fileName"] for f in out["codeFiles"]}
+        endpoints = [s.get("endpoint", "") for s in out.get("apiSpec", []) if isinstance(s, dict)]
+        methods = {
+            (str(s.get("method", "")).upper(), s.get("endpoint", ""))
+            for s in out.get("apiSpec", [])
+            if isinstance(s, dict)
+        }
+        blob = str(out)
+        assert "/api/auth/signup" not in blob
+        assert ("POST", "/api/auth/login") in methods
+        assert ("GET", "/api/users/me") in methods
+        assert "/api/auth/login" in endpoints
+        assert "/api/users/me" in endpoints
+        for req in (
+            "AuthController.java",
+            "JwtTokenProvider.java",
+            "JwtAuthenticationFilter.java",
+            "SecurityConfig.java",
+        ):
+            assert req in names
+        assert "AppController" not in blob
+        assert "JWTController" not in blob
+
 
 class TestGenericBucketGuard:
     def test_unknown_feature_gets_baseline(self) -> None:
@@ -293,3 +505,43 @@ class TestBucketPromptConstraints:
         )
         assert "crud" in prompt.lower()
         assert "PostController" in prompt
+
+
+class TestJavaCodefileSanitization:
+    def test_invalid_java_filenames_removed_across_buckets(self) -> None:
+        junk = {
+            "fileName": "module_0.py.java",
+            "filePath": "src/main/java/com/example/post/module_0.py.java",
+            "role": "데이터 접근",
+            "language": "java",
+            "content": "public class module_0 {}",
+        }
+        for feature in ("게시글 CRUD", "JWT 인증", "회원가입"):
+            raw = {
+                "overview": {
+                    "featureName": feature,
+                    "purpose": "",
+                    "useCases": [],
+                    "resultDescription": "",
+                    "techStack": [],
+                    "learningGoals": [],
+                },
+                "requirements": [],
+                "flow": {"steps": [], "layers": []},
+                "apiSpec": [],
+                "codeFiles": [junk],
+                "basicQuestions": [],
+                "missions": [],
+                "interviewQuestions": [],
+                "nextRecommendations": [],
+            }
+            kwargs: dict = {"includeMissions": False, "includeInterview": False}
+            if feature == "JWT 인증":
+                kwargs["level"] = DifficultyLevel.INTERMEDIATE
+            out = FeatureTemplateNormalizer.normalize(raw, _req(feature, **kwargs))
+            for f in out["codeFiles"]:
+                fn = f["fileName"]
+                assert ".py.java" not in fn
+                assert not fn.startswith("module_")
+                assert fn.endswith(".java")
+                assert fn[0].isupper()
