@@ -54,19 +54,13 @@ _JWT_AUTH_BUCKETS = frozenset({"jwt_auth", "jwt 인증", "jwt인증", "jwt authe
 def classify_feature_template_bucket(feature_name: str | None) -> str | None:
     """요청/문서 featureName을 검색·rerank용 bucket으로 분류."""
 
+    from app.services.feature_template_bucket_guards import detect_feature_template_bucket
+
     raw = (feature_name or "").strip()
     if not raw:
         return None
-    fn = raw.lower()
-    if fn in _LOGIN_BUCKETS or raw in ("로그인", "Login"):
-        return "login"
-    if fn in _SIGNUP_BUCKETS or "회원가입" in raw or "signup" in fn:
-        return "signup"
-    if fn in _CRUD_BUCKETS or "crud" in fn or "게시글" in raw:
-        return "crud"
-    if "jwt" in fn or raw in ("JWT 인증", "JWT인증"):
-        return "jwt_auth"
-    return fn
+    bucket = detect_feature_template_bucket(feature_name)
+    return bucket if bucket != "generic" else raw.lower()
 
 
 def _feature_specific_query_tokens(bucket: str | None) -> list[str]:
@@ -125,6 +119,8 @@ def rerank_feature_template_rag_references(
 ) -> list[dict[str, Any]]:
     """vector score + featureName/framework/category 일치로 재정렬."""
 
+    from app.services.feature_template_bucket_guards import LOGIN_BUCKET
+
     if not references:
         return []
     if top_k < 1:
@@ -149,7 +145,9 @@ def rerank_feature_template_rag_references(
             bonus += 1.5
         if ref_fn in _GENERAL_FEATURE_NAMES:
             bonus += 0.25
-        elif request_bucket and ref_bucket == "login" and request_bucket != "login":
+        elif request_bucket and ref_bucket == LOGIN_BUCKET and request_bucket != LOGIN_BUCKET:
+            # login bucket 문서가 signup/crud/jwt_auth/generic 검색에 섞이는 것을 완화
+            # (jwt_auth는 AuthController·POST /api/auth/login을 canonical에 포함)
             bonus -= 1.75
         if ref_cat == "feature_template":
             bonus += 0.15

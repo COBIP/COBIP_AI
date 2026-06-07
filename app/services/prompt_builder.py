@@ -803,6 +803,16 @@ def build_feature_template_prompt_with_applied_rags(
     else:
         reference_context_text = "(없음)"
 
+    section_instructions = _build_initial_generation_section_instructions(
+        request,
+        profile=profile,
+    )
+    from app.services.feature_template_bucket_guards import build_bucket_prompt_constraints
+
+    bucket_constraints = build_bucket_prompt_constraints(request)
+    if bucket_constraints:
+        section_instructions = f"{section_instructions}\n\n{bucket_constraints}"
+
     user_prompt = FEATURE_TEMPLATE_USER_PROMPT_TEMPLATE.format(
         language=request.language,
         framework=framework_text,
@@ -813,10 +823,7 @@ def build_feature_template_prompt_with_applied_rags(
         includeInterview=str(request.includeInterview).lower(),
         ragContextSection=rag_context_section,
         referenceContext=reference_context_text,
-        sectionInstructions=_build_initial_generation_section_instructions(
-            request,
-            profile=profile,
-        ),
+        sectionInstructions=section_instructions,
         jsonSkeleton=_build_initial_generation_json_skeleton(
             request,
             profile=profile,

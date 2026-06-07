@@ -228,13 +228,26 @@ def _interview_item_has_placeholder(item: dict[str, Any]) -> bool:
 def _java_class_prefix(request: FeatureTemplateGenerateRequest | None) -> str:
     if request is None:
         return "Login"
+    from app.services.feature_template_bucket_guards import detect_feature_template_bucket
+
+    bucket = detect_feature_template_bucket(request.featureName, request.framework)
+    if bucket == "login":
+        return "Login"
+    if bucket == "signup":
+        return "Signup"
+    if bucket == "crud":
+        return "Post"
+    if bucket == "jwt_auth":
+        return "Auth"
     fn = (request.featureName or "").strip()
     if fn in ("로그인", "login", "Login"):
         return "Login"
     safe = re.sub(r"[^0-9a-zA-Z_]+", "", fn.replace(" ", ""))
     if safe and safe[0].isalpha():
         return safe[0].upper() + safe[1:]
-    return "App"
+    from app.services.feature_template_bucket_guards import _generic_class_prefix
+
+    return _generic_class_prefix(fn)
 
 
 def _is_java_spring(request: FeatureTemplateGenerateRequest | None) -> bool:
@@ -2269,9 +2282,25 @@ def _apply_post_normalize_quality(
                     changed_fields,
                 )
             else:
+                from app.services.feature_template_bucket_guards import (
+                    detect_feature_template_bucket,
+                    should_skip_legacy_java_login_baseline,
+                )
+
+                bucket = detect_feature_template_bucket(
+                    request.featureName if request else None,
+                    request.framework if request else None,
+                )
+                skip_legacy_login_baseline = (
+                    request is not None
+                    and _is_java_spring(request)
+                    and should_skip_legacy_java_login_baseline(bucket)
+                )
                 prefix = _java_class_prefix(request)
                 use_java = request is None or request.language.lower() == "java"
-                templates = _java_spring_code_templates(prefix) if use_java else []
+                templates = [] if skip_legacy_login_baseline else (
+                    _java_spring_code_templates(prefix) if use_java else []
+                )
                 by_name = {str(t["fileName"]): t for t in templates}
                 seen: set[str] = set()
                 new_list: list[dict[str, Any]] = []
@@ -2665,6 +2694,9 @@ def normalize_feature_template_payload(
     _apply_post_normalize_quality(normalized, request, changed_fields)
     _apply_java_codefiles_role_guard(normalized, request, changed_fields)
     _apply_spring_boot_login_quality_guard(normalized, request, changed_fields)
+    from app.services.feature_template_bucket_guards import apply_feature_bucket_guards
+
+    apply_feature_bucket_guards(normalized, request, changed_fields)
     _ensure_final_login_defense(normalized, request, changed_fields)
 
     if changed_fields:
