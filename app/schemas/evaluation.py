@@ -1,10 +1,16 @@
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.feature_template import (
     ApiSpecSchema,
     MissionSchema,
     QuestionSchema,
     RequirementSchema,
+)
+from app.services.evaluation_payload_normalizer import (
+    normalize_mission_feedback_payload,
+    normalize_quiz_grade_payload,
 )
 
 __all__ = [
@@ -37,12 +43,19 @@ class CodeIssueSchema(BaseModel):
 
 
 class QuizGradeRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     templateId: int | None = None
     featureName: str
     question: QuestionSchema
     userAnswer: str
     relatedRequirements: list[RequirementSchema] | None = None
     relatedApiSpecs: list[ApiSpecSchema] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_fe_payload(cls, data: Any) -> Any:
+        return normalize_quiz_grade_payload(data)
 
 
 class QuizGradeResponse(BaseModel):
@@ -55,12 +68,22 @@ class QuizGradeResponse(BaseModel):
 
 
 class MissionFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     templateId: int | None = None
     featureName: str
     mission: MissionSchema
     submittedCode: list[SubmittedCodeSchema]
     requirements: list[RequirementSchema]
-    apiSpecs: list[ApiSpecSchema]
+    apiSpecs: list[ApiSpecSchema] = Field(
+        default_factory=list,
+        validation_alias="apiSpecs",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_fe_payload(cls, data: Any) -> Any:
+        return normalize_mission_feedback_payload(data)
 
 
 class MissionFeedbackResponse(BaseModel):

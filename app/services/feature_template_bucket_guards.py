@@ -1761,6 +1761,60 @@ def _apply_crud_guard(
             },
         ]
         changed_fields.append("basicQuestions[crud-default]")
+    if request.includeMissions and (
+        not isinstance(normalized.get("missions"), list) or len(normalized["missions"]) < 2
+    ):
+        normalized["missions"] = [
+            {
+                "missionId": "M-001",
+                "title": "PostController CRUD 매핑",
+                "description": "미션 목표: /api/posts CRUD 5종 endpoint 구현",
+                "missionType": "implementation",
+                "requirements": ["PostController", "PostMapping"],
+                "successCriteria": ["5종 endpoint"],
+                "relatedRequirements": ["R-001"],
+                "difficulty": request.level.value,
+            },
+            {
+                "missionId": "M-002",
+                "title": "404 NOT_FOUND 처리",
+                "description": "미션 목표: postId 미존재 시 예외",
+                "missionType": "validation",
+                "requirements": ["404", "findById"],
+                "successCriteria": ["NOT_FOUND"],
+                "relatedRequirements": ["R-003"],
+                "difficulty": request.level.value,
+            },
+        ]
+        changed_fields.append("missions[crud-default]")
+    if request.includeInterview and (
+        not isinstance(normalized.get("interviewQuestions"), list)
+        or len(normalized["interviewQuestions"]) < 3
+    ):
+        normalized["interviewQuestions"] = [
+            {
+                "questionId": "IQ-001",
+                "question": "PostController CRUD 매핑은?",
+                "keyPoints": ["PostMapping", "GetMapping"],
+                "sampleAnswer": "HTTP 메서드별 매핑",
+                "relatedSection": "codeFiles",
+            },
+            {
+                "questionId": "IQ-002",
+                "question": "PostRepository 역할은?",
+                "keyPoints": ["JPA", "Repository"],
+                "sampleAnswer": "DB 접근",
+                "relatedSection": "flow",
+            },
+            {
+                "questionId": "IQ-003",
+                "question": "404는 언제?",
+                "keyPoints": ["NOT_FOUND", "postId"],
+                "sampleAnswer": "postId 없음",
+                "relatedSection": "apiSpec",
+            },
+        ]
+        changed_fields.append("interviewQuestions[crud-default]")
     if request.includeCode:
         canon = _canonical_crud_codefiles()
         _merge_required_codefiles(
@@ -1818,6 +1872,60 @@ def _apply_jwt_guard(
             },
         ]
         changed_fields.append("basicQuestions[jwt-default]")
+    if request.includeMissions and (
+        not isinstance(normalized.get("missions"), list) or len(normalized["missions"]) < 2
+    ):
+        normalized["missions"] = [
+            {
+                "missionId": "M-001",
+                "title": "JWT 토큰 발급",
+                "description": "미션 목표: login 성공 시 access token 반환",
+                "missionType": "implementation",
+                "requirements": ["JwtTokenProvider", "login"],
+                "successCriteria": ["Bearer token"],
+                "relatedRequirements": ["R-001"],
+                "difficulty": request.level.value,
+            },
+            {
+                "missionId": "M-002",
+                "title": "인증 필터 적용",
+                "description": "미션 목표: JwtAuthenticationFilter로 보호 API 인증",
+                "missionType": "security",
+                "requirements": ["JwtAuthenticationFilter", "SecurityConfig"],
+                "successCriteria": ["GET /api/users/me"],
+                "relatedRequirements": ["R-002"],
+                "difficulty": request.level.value,
+            },
+        ]
+        changed_fields.append("missions[jwt-default]")
+    if request.includeInterview and (
+        not isinstance(normalized.get("interviewQuestions"), list)
+        or len(normalized["interviewQuestions"]) < 3
+    ):
+        normalized["interviewQuestions"] = [
+            {
+                "questionId": "IQ-001",
+                "question": "JwtTokenProvider 역할은?",
+                "keyPoints": ["token", "sign"],
+                "sampleAnswer": "JWT 생성·검증",
+                "relatedSection": "codeFiles",
+            },
+            {
+                "questionId": "IQ-002",
+                "question": "Bearer 헤더 형식은?",
+                "keyPoints": ["Authorization", "Bearer"],
+                "sampleAnswer": "Authorization: Bearer {token}",
+                "relatedSection": "apiSpec",
+            },
+            {
+                "questionId": "IQ-003",
+                "question": "인증 실패 HTTP status?",
+                "keyPoints": ["401", "Unauthorized"],
+                "sampleAnswer": "401",
+                "relatedSection": "requirements",
+            },
+        ]
+        changed_fields.append("interviewQuestions[jwt-default]")
     if request.includeCode:
         canon = _canonical_jwt_codefiles()
         _merge_required_codefiles(
@@ -1915,6 +2023,318 @@ def _apply_generic_guard(
         )
 
 
+_BUCKET_NEXT_RECOMMENDATIONS: dict[str, list[dict[str, Any]]] = {
+    SIGNUP_BUCKET: [
+        {
+            "featureName": "로그인",
+            "reason": "회원가입 후 인증 흐름 학습",
+            "expectedLearning": "JWT/세션 기반 로그인",
+            "priority": 1,
+        },
+        {
+            "featureName": "JWT 인증",
+            "reason": "인증 토큰 심화",
+            "expectedLearning": "Bearer 토큰·필터 체인",
+            "priority": 2,
+        },
+        {
+            "featureName": "프로필 수정",
+            "reason": "회원 정보 관리 확장",
+            "expectedLearning": "인증 사용자 API",
+            "priority": 3,
+        },
+    ],
+    CRUD_BUCKET: [
+        {
+            "featureName": "댓글 CRUD",
+            "reason": "연관 엔티티 확장",
+            "expectedLearning": "1:N 관계·FK",
+            "priority": 1,
+        },
+        {
+            "featureName": "JWT 인증",
+            "reason": "작성자 인증 연동",
+            "expectedLearning": "보호 API",
+            "priority": 2,
+        },
+        {
+            "featureName": "페이징 조회",
+            "reason": "목록 API 고도화",
+            "expectedLearning": "Pageable·정렬",
+            "priority": 3,
+        },
+    ],
+    JWT_AUTH_BUCKET: [
+        {
+            "featureName": "회원가입",
+            "reason": "인증 전 사용자 등록",
+            "expectedLearning": "User 저장·중복 검사",
+            "priority": 1,
+        },
+        {
+            "featureName": "프로필 조회",
+            "reason": "인증 사용자 정보 API",
+            "expectedLearning": "GET /api/users/me 활용",
+            "priority": 2,
+        },
+        {
+            "featureName": "토큰 갱신",
+            "reason": "Refresh token 패턴",
+            "expectedLearning": "만료·재발급",
+            "priority": 3,
+        },
+    ],
+}
+
+
+def _section_text_blob(items: object) -> str:
+    if not isinstance(items, list):
+        return ""
+    parts: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for val in item.values():
+            if isinstance(val, str):
+                parts.append(val)
+            elif isinstance(val, list):
+                parts.extend(str(x) for x in val if x is not None)
+    return "\n".join(parts)
+
+
+def _replace_off_topic_section_items(
+    normalized: dict[str, Any],
+    *,
+    section: str,
+    forbidden: tuple[str, ...],
+    replacement_factory: Callable[[], list[dict[str, Any]]],
+    changed_fields: list[str],
+    tag: str,
+) -> None:
+    items = normalized.get(section)
+    if not isinstance(items, list) or not items:
+        return
+    blob = _section_text_blob(items).lower()
+    if not _text_has_any(blob, forbidden):
+        return
+    normalized[section] = replacement_factory()
+    changed_fields.append(f"{section}[cross-section-{tag}]")
+
+
+def _apply_cross_section_consistency(
+    normalized: dict[str, Any],
+    request: FeatureTemplateGenerateRequest,
+    bucket: str,
+    changed_fields: list[str],
+) -> None:
+    """apiSpec·codeFiles·missions·questions 간 bucket 주제 일치 보정."""
+
+    if bucket == SIGNUP_BUCKET:
+        if request.includeMissions:
+            _replace_off_topic_section_items(
+                normalized,
+                section="missions",
+                forbidden=("/api/auth/login", "jwt", "postcontroller", "/api/posts"),
+                replacement_factory=lambda: [
+                    {
+                        "missionId": "M-001",
+                        "title": "SignupService 구현",
+                        "description": "미션 목표: SignupRequest 검증 후 User 저장",
+                        "missionType": "implementation",
+                        "requirements": ["SignupService", "UserRepository"],
+                        "successCriteria": ["POST /api/auth/signup 동작"],
+                        "relatedRequirements": ["R-001"],
+                        "difficulty": request.level.value,
+                    },
+                    {
+                        "missionId": "M-002",
+                        "title": "비밀번호 BCrypt 적용",
+                        "description": "미션 목표: PasswordEncoder로 해시 저장",
+                        "missionType": "security",
+                        "requirements": ["PasswordEncoder", "BCrypt"],
+                        "successCriteria": ["평문 미저장"],
+                        "relatedRequirements": ["R-003"],
+                        "difficulty": request.level.value,
+                    },
+                ],
+                changed_fields=changed_fields,
+                tag="signup",
+            )
+        if request.includeInterview:
+            _replace_off_topic_section_items(
+                normalized,
+                section="interviewQuestions",
+                forbidden=("jwt filter", "postcontroller", "게시글 삭제"),
+                replacement_factory=lambda: [
+                    {
+                        "questionId": "IQ-001",
+                        "question": "SignupController와 SignupService 역할 차이는?",
+                        "keyPoints": ["Controller", "Service", "signup"],
+                        "sampleAnswer": "Controller는 HTTP, Service는 비즈니스 로직",
+                        "relatedSection": "flow",
+                    },
+                    {
+                        "questionId": "IQ-002",
+                        "question": "회원가입 시 비밀번호를 해시하는 이유는?",
+                        "keyPoints": ["BCrypt", "PasswordEncoder"],
+                        "sampleAnswer": "평문 저장 방지",
+                        "relatedSection": "codeFiles",
+                    },
+                    {
+                        "questionId": "IQ-003",
+                        "question": "이메일 중복 시 어떤 HTTP status를 반환하나?",
+                        "keyPoints": ["409", "existsByEmail"],
+                        "sampleAnswer": "409 Conflict",
+                        "relatedSection": "apiSpec",
+                    },
+                ],
+                changed_fields=changed_fields,
+                tag="signup",
+            )
+    elif bucket == CRUD_BUCKET:
+        if request.includeMissions:
+            _replace_off_topic_section_items(
+                normalized,
+                section="missions",
+                forbidden=("/api/auth/login", "/api/auth/signup", "signup", "jwt"),
+                replacement_factory=lambda: [
+                    {
+                        "missionId": "M-001",
+                        "title": "PostController CRUD 매핑",
+                        "description": "미션 목표: /api/posts CRUD 5종 endpoint 구현",
+                        "missionType": "implementation",
+                        "requirements": ["PostController", "PostService"],
+                        "successCriteria": ["POST/GET/PUT/DELETE 매핑"],
+                        "relatedRequirements": ["R-001"],
+                        "difficulty": request.level.value,
+                    },
+                    {
+                        "missionId": "M-002",
+                        "title": "postId 없음 404 처리",
+                        "description": "미션 목표: 단건 조회·수정·삭제 시 NOT_FOUND",
+                        "missionType": "validation",
+                        "requirements": ["404", "findById"],
+                        "successCriteria": ["존재하지 않는 postId 예외"],
+                        "relatedRequirements": ["R-003"],
+                        "difficulty": request.level.value,
+                    },
+                ],
+                changed_fields=changed_fields,
+                tag="crud",
+            )
+        if request.includeInterview:
+            _replace_off_topic_section_items(
+                normalized,
+                section="interviewQuestions",
+                forbidden=("회원가입", "signup", "bcrypt", "jwt filter"),
+                replacement_factory=lambda: [
+                    {
+                        "questionId": "IQ-001",
+                        "question": "PostController에서 CRUD 메서드 매핑은?",
+                        "keyPoints": ["PostMapping", "GetMapping", "PutMapping", "DeleteMapping"],
+                        "sampleAnswer": "HTTP 메서드별 @Mapping",
+                        "relatedSection": "codeFiles",
+                    },
+                    {
+                        "questionId": "IQ-002",
+                        "question": "PostService와 PostRepository 책임은?",
+                        "keyPoints": ["Service", "Repository", "JPA"],
+                        "sampleAnswer": "Service는 로직, Repository는 DB",
+                        "relatedSection": "flow",
+                    },
+                    {
+                        "questionId": "IQ-003",
+                        "question": "존재하지 않는 postId 조회 시 status?",
+                        "keyPoints": ["404", "NOT_FOUND"],
+                        "sampleAnswer": "404 Not Found",
+                        "relatedSection": "apiSpec",
+                    },
+                ],
+                changed_fields=changed_fields,
+                tag="crud",
+            )
+
+    elif bucket == JWT_AUTH_BUCKET:
+        if request.includeMissions:
+            _replace_off_topic_section_items(
+                normalized,
+                section="missions",
+                forbidden=("/api/auth/signup", "signup", "postcontroller", "/api/posts"),
+                replacement_factory=lambda: [
+                    {
+                        "missionId": "M-001",
+                        "title": "JwtTokenProvider 구현",
+                        "description": "미션 목표: login 시 access token 발급",
+                        "missionType": "implementation",
+                        "requirements": ["JwtTokenProvider", "createAccessToken"],
+                        "successCriteria": ["POST /api/auth/login 응답에 token"],
+                        "relatedRequirements": ["R-001"],
+                        "difficulty": request.level.value,
+                    },
+                    {
+                        "missionId": "M-002",
+                        "title": "JwtAuthenticationFilter 연동",
+                        "description": "미션 목표: Bearer 토큰 검증 후 SecurityContext 설정",
+                        "missionType": "security",
+                        "requirements": ["JwtAuthenticationFilter", "Bearer"],
+                        "successCriteria": ["GET /api/users/me 인증 통과"],
+                        "relatedRequirements": ["R-002"],
+                        "difficulty": request.level.value,
+                    },
+                ],
+                changed_fields=changed_fields,
+                tag="jwt",
+            )
+        if request.includeInterview:
+            _replace_off_topic_section_items(
+                normalized,
+                section="interviewQuestions",
+                forbidden=("회원가입", "signup", "postrepository", "게시글"),
+                replacement_factory=lambda: [
+                    {
+                        "questionId": "IQ-001",
+                        "question": "JwtAuthenticationFilter는 어디서 동작하나?",
+                        "keyPoints": ["Filter chain", "Bearer"],
+                        "sampleAnswer": "요청마다 Authorization 헤더 검증",
+                        "relatedSection": "flow",
+                    },
+                    {
+                        "questionId": "IQ-002",
+                        "question": "SecurityConfig에서 login endpoint는?",
+                        "keyPoints": ["permitAll", "/api/auth/login"],
+                        "sampleAnswer": "인증 없이 허용",
+                        "relatedSection": "codeFiles",
+                    },
+                    {
+                        "questionId": "IQ-003",
+                        "question": "보호 API 호출 시 필요한 헤더는?",
+                        "keyPoints": ["Authorization", "Bearer"],
+                        "sampleAnswer": "Authorization: Bearer {token}",
+                        "relatedSection": "apiSpec",
+                    },
+                ],
+                changed_fields=changed_fields,
+                tag="jwt",
+            )
+
+    recs = _BUCKET_NEXT_RECOMMENDATIONS.get(bucket)
+    if recs:
+        nxt = normalized.get("nextRecommendations")
+        if not isinstance(nxt, list) or len(nxt) < 3:
+            normalized["nextRecommendations"] = [dict(r) for r in recs]
+            changed_fields.append(f"nextRecommendations[{bucket}-default]")
+        else:
+            blob = _section_text_blob(nxt).lower()
+            wrong = (
+                (bucket == SIGNUP_BUCKET and "postcontroller" in blob)
+                or (bucket == CRUD_BUCKET and "/api/auth/login" in blob)
+                or (bucket == JWT_AUTH_BUCKET and "/api/posts" in blob)
+            )
+            if wrong:
+                normalized["nextRecommendations"] = [dict(r) for r in recs]
+                changed_fields.append(f"nextRecommendations[{bucket}-cross-section]")
+
+
 def apply_feature_bucket_guards(
     normalized: dict[str, Any],
     request: FeatureTemplateGenerateRequest | None,
@@ -1939,6 +2359,8 @@ def apply_feature_bucket_guards(
         _apply_jwt_guard(normalized, request, changed_fields)
     else:
         _apply_generic_guard(normalized, request, changed_fields)
+
+    _apply_cross_section_consistency(normalized, request, bucket, changed_fields)
 
 
 _BUCKET_PROMPTS: dict[str, str] = {
