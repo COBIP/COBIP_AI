@@ -6,6 +6,7 @@ import logging
 
 from app.core.config import settings
 from app.schemas.chat import AgentPayload, ChatRequest, ChatResponseData
+from app.services.chat_query_policy import should_attempt_rag_for_general_chat
 from app.services.chat_service import ChatService
 
 __all__ = [
@@ -83,15 +84,19 @@ def _build_feature_template_help_answer(message: str) -> str:
 
 
 class GeneralChatHandler:
-    """일반 대화: useRag=true 이고 RAG_ENABLED=true일 때만 RAG."""
+    """일반 대화: 개념 질문은 일반 LLM, 프로젝트/문서 질문만 RAG 시도."""
 
     async def handle(self, request: ChatRequest, agent: AgentPayload) -> ChatResponseData:
-        apply_rag = settings.RAG_ENABLED and (request.useRag is True)
+        apply_rag = should_attempt_rag_for_general_chat(
+            request.message,
+            request.useRag,
+        )
         query_len = len(request.message)
         logger.info(
-            "agent_handler general_chat apply_rag=%s query_len=%s",
+            "agent_handler general_chat apply_rag=%s query_len=%s use_rag=%s",
             apply_rag,
             query_len,
+            request.useRag,
         )
         return ChatService().answer(
             request,
