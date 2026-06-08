@@ -61,6 +61,124 @@ def _jwt_canonical_submitted() -> list[dict]:
     ]
 
 
+def _signup_five_requirements() -> list[dict]:
+    return [
+        {
+            "requirementId": "R-001",
+            "name": "입력값 검증",
+            "description": "email password nickname validation",
+            "inputValue": "dto",
+            "processCondition": "valid",
+            "successResult": "ok",
+            "failureResult": "400",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "POST /api/auth/signup",
+        },
+        {
+            "requirementId": "R-002",
+            "name": "이메일 중복 검사",
+            "description": "existsByEmail duplicate email",
+            "inputValue": "email",
+            "processCondition": "unique",
+            "successResult": "ok",
+            "failureResult": "409",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "SignupService",
+        },
+        {
+            "requirementId": "R-003",
+            "name": "비밀번호 해시 저장",
+            "description": "PasswordEncoder BCrypt hash password",
+            "inputValue": "password",
+            "processCondition": "encode",
+            "successResult": "201",
+            "failureResult": "400",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "POST /api/auth/signup",
+        },
+        {
+            "requirementId": "R-004",
+            "name": "회원 저장",
+            "description": "User UserRepository save signup",
+            "inputValue": "dto",
+            "processCondition": "persist",
+            "successResult": "saved",
+            "failureResult": "409",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "UserRepository",
+        },
+        {
+            "requirementId": "R-005",
+            "name": "회원가입 성공 응답",
+            "description": "SignupResponse signup response",
+            "inputValue": "result",
+            "processCondition": "201",
+            "successResult": "ok",
+            "failureResult": "400",
+            "priority": "HIGH",
+            "relatedScreenOrApi": "POST /api/auth/signup",
+        },
+    ]
+
+
+def _signup_partial_evidence_code() -> list[dict]:
+    """운영 재현: 핵심 endpoint/controller는 있으나 evidence 4건 수준."""
+
+    return [
+        {
+            "fileName": "SignupController.java",
+            "filePath": "src/main/java/com/example/auth/SignupController.java",
+            "language": "java",
+            "content": """
+package com.example.auth;
+import org.springframework.web.bind.annotation.*;
+@RestController
+@RequestMapping("/api/auth")
+public class SignupController {
+    private final SignupService signupService;
+    public SignupController(SignupService signupService) { this.signupService = signupService; }
+    @PostMapping("/signup")
+    public SignupResponse signup(@RequestBody SignupRequest request) {
+        return signupService.signup(request);
+    }
+}
+""",
+        },
+        {
+            "fileName": "SignupService.java",
+            "filePath": "src/main/java/com/example/auth/SignupService.java",
+            "language": "java",
+            "content": """
+package com.example.auth;
+import org.springframework.stereotype.Service;
+@Service
+public class SignupService {
+    private final UserRepository userRepository;
+    public SignupService(UserRepository userRepository) { this.userRepository = userRepository; }
+    public SignupResponse signup(SignupRequest request) {
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new IllegalStateException("duplicate");
+        }
+        return new SignupResponse(1L, request.getEmail(), request.getNickname());
+    }
+}
+""",
+        },
+        {
+            "fileName": "SignupRequest.java",
+            "filePath": "src/main/java/com/example/auth/SignupRequest.java",
+            "language": "java",
+            "content": "package com.example.auth; public class SignupRequest { private String email; private String nickname; public String getEmail(){return email;} public String getNickname(){return nickname;} }",
+        },
+        {
+            "fileName": "UserRepository.java",
+            "filePath": "src/main/java/com/example/auth/UserRepository.java",
+            "language": "java",
+            "content": "package com.example.auth; public interface UserRepository { boolean existsByEmail(String email); }",
+        },
+    ]
+
+
 def _base_mission_payload(
     feature_name: str,
     submitted: list[dict],
@@ -193,6 +311,20 @@ class TestMissionFeedbackGrader:
         result = MissionFeedbackService().generate_feedback(req)
         assert result.score >= 70
         assert result.passed is True
+
+    def test_signup_partial_evidence_score_70_plus_passes(self) -> None:
+        """운영 케이스: requirements 5/5, evidence ~4건, score>=70 → passed=true."""
+
+        payload = _base_mission_payload("회원가입", _signup_partial_evidence_code())
+        payload["requirements"] = _signup_five_requirements()
+        req = MissionFeedbackRequest(**payload)
+        result = MissionFeedbackService().generate_feedback(req)
+        assert len(result.satisfiedRequirements) == 5
+        assert result.score >= 70
+        assert result.apiSpecIssues == []
+        assert result.codeIssues == []
+        assert result.passed is True
+        assert "evidence" in result.summary
 
     def test_crud_canonical_passes(self) -> None:
         req = MissionFeedbackRequest(

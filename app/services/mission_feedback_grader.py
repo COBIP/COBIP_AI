@@ -15,6 +15,8 @@ from app.schemas.evaluation import (
 from app.services.feature_template_bucket_guards import detect_feature_template_bucket
 __all__ = ["MissionFeedbackGrader"]
 
+_PASS_SCORE_THRESHOLD = 70
+
 _SECURE_PASSWORD_KEYWORDS: tuple[str, ...] = (
     "encrypt",
     "hash",
@@ -120,7 +122,7 @@ class MissionFeedbackGrader:
         bucket = detect_feature_template_bucket(request.featureName)
 
         satisfied, missing, req_score = self._grade_requirements(request, merged_lower, bucket)
-        evidence_score, evidence_hits, critical_misses = self._grade_evidence(
+        evidence_score, evidence_hits = self._grade_evidence(
             merged_code, merged_lower, bucket
         )
         api_issues, api_score = self._grade_api_specs(request, merged_code, merged_lower)
@@ -128,25 +130,22 @@ class MissionFeedbackGrader:
 
         score = min(100, int(round(req_score * 0.35 + evidence_score * 0.45 + api_score * 0.20)))
 
-        has_controller = bool(
-            re.search(r"@RestController|@Controller", merged_code, re.IGNORECASE)
-        )
+        has_controller = self._has_controller_evidence(merged_code)
         has_critical_endpoint = self._has_critical_endpoint_evidence(
             request, merged_code, merged_lower, bucket
         )
 
-        critical_issues: list[str] = []
-        if not has_controller:
-            critical_issues.append("핵심 Controller가 제출 코드에서 발견되지 않습니다.")
-        if not has_critical_endpoint:
-            critical_issues.append("핵심 API endpoint가 제출 코드에서 발견되지 않습니다.")
-        if critical_misses:
-            critical_issues.extend(critical_misses)
-        total_req = len(request.requirements)
-        if total_req >= 3 and len(missing) / total_req > 0.7:
-            critical_issues.append("요구사항 대부분이 코드 근거로 확인되지 않습니다.")
+        critical_issues = self._collect_critical_issues(
+            missing=missing,
+            total_requirements=len(request.requirements),
+            has_controller=has_controller,
+            has_critical_endpoint=has_critical_endpoint,
+            api_issues=api_issues,
+            api_specs_count=len(request.apiSpecs),
+            code_issues=code_issues,
+        )
 
-        passed = score >= 70 and not critical_issues
+        passed = score >= _PASS_SCORE_THRESHOLD and not critical_issues
 
         summary = (
             f"요구사항 {len(satisfied)}/{len(request.requirements)} 만족, "
@@ -245,13 +244,14 @@ class MissionFeedbackGrader:
         merged_code: str,
         merged_lower: str,
         bucket: str,
-    ) -> tuple[float, list[str], list[str]]:
+    ) -> tuple[float, list[str]]:
+        """evidence는 점수 가중치에만 반영. 개수 부족만으로 passed를 막지 않는다."""
+
         rules = _BUCKET_RULES.get(bucket)
         if not rules:
             rules = self._generic_rules(merged_lower)
 
         hits: list[str] = []
-        critical_misses: list[str] = []
         earned = 0
         max_score = sum(r.weight for r in rules)
 
@@ -260,12 +260,41 @@ class MissionFeedbackGrader:
             if matched:
                 earned += rule.weight
                 hits.append(rule.key)
-            elif rule.critical:
-                critical_misses.append(f"핵심 evidence 누락: {rule.key}")
 
         if max_score == 0:
-            return 0.0, hits, critical_misses
-        return (earned / max_score) * 100, hits, critical_misses
+            return 0.0, hits
+        return (earned / max_score) * 100, hits
+
+    @staticmethod
+    def _has_controller_evidence(merged_code: str) -> bool:
+        return bool(re.search(r"@RestController|@Controller", merged_code, re.IGNORECASE))
+
+    @staticmethod
+    def _collect_critical_issues(
+        *,
+        missing: list[str],
+        total_requirements: int,
+        has_controller: bool,
+        has_critical_endpoint: bool,
+        api_issues: list[str],
+        api_specs_count: int,
+        code_issues: list[CodeIssueSchema],
+    ) -> list[str]:
+        """passed=false를 유발하는 명확한 critical issue만 수집."""
+
+        critical: list[str] = []
+        if not has_controller:
+            critical.append("핵심 Controller가 제출 코드에서 발견되지 않습니다.")
+        if not has_critical_endpoint:
+            critical.append("핵심 API endpoint가 제출 코드에서 발견되지 않습니다.")
+        if total_requirements >= 3 and len(missing) / total_requirements > 0.7:
+            critical.append("요구사항 대부분이 코드 근거로 확인되지 않습니다.")
+        if api_specs_count > 0 and len(api_issues) >= api_specs_count:
+            critical.append("apiSpec과 코드가 완전히 불일치합니다.")
+        for issue in code_issues:
+            if (issue.severity or "").lower() in {"critical", "error"}:
+                critical.append(issue.message)
+        return critical
 
     @staticmethod
     def _generic_rules(merged_lower: str) -> tuple[_EvidenceRule, ...]:
