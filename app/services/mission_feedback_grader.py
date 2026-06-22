@@ -12,6 +12,7 @@ from app.schemas.evaluation import (
     MissionFeedbackResponse,
     SubmittedCodeSchema,
 )
+from app.schemas.feature_template import RequirementSchema
 from app.services.feature_template_bucket_guards import detect_feature_template_bucket
 __all__ = ["MissionFeedbackGrader"]
 
@@ -121,12 +122,15 @@ class MissionFeedbackGrader:
         merged_lower = merged_code.lower()
         bucket = detect_feature_template_bucket(request.featureName)
 
-        satisfied, missing, req_score = self._grade_requirements(request, merged_lower, bucket)
+        satisfied, missing_reqs, req_score = self._grade_requirements(request, merged_lower, bucket)
         evidence_score, evidence_hits = self._grade_evidence(
             merged_code, merged_lower, bucket
         )
         api_issues, api_score = self._grade_api_specs(request, merged_code, merged_lower)
         code_issues = self._detect_code_issues(request.submittedCode, merged_lower)
+        missing_requirements = [
+            self._format_missing_requirement(req) for req in missing_reqs
+        ]
 
         score = min(100, int(round(req_score * 0.35 + evidence_score * 0.45 + api_score * 0.20)))
 
@@ -136,7 +140,7 @@ class MissionFeedbackGrader:
         )
 
         critical_issues = self._collect_critical_issues(
-            missing=missing,
+            missing=[req.name for req in missing_reqs],
             total_requirements=len(request.requirements),
             has_controller=has_controller,
             has_critical_endpoint=has_critical_endpoint,
@@ -147,20 +151,30 @@ class MissionFeedbackGrader:
 
         passed = score >= _PASS_SCORE_THRESHOLD and not critical_issues
 
-        summary = (
-            f"요구사항 {len(satisfied)}/{len(request.requirements)} 만족, "
-            f"evidence {len(evidence_hits)}건, "
-            f"apiSpec 이슈 {len(api_issues)}건, "
-            f"코드 이슈 {len(code_issues)}건. score={score}"
+        summary = self._build_summary(
+            passed=passed,
+            score=score,
+            satisfied_count=len(satisfied),
+            total_requirements=len(request.requirements),
+            evidence_hits=evidence_hits,
+            api_issues=api_issues,
+            code_issues=code_issues,
+            critical_issues=critical_issues,
+            missing_reqs=missing_reqs,
+            bucket=bucket,
         )
 
         improvement_suggestions = self._build_suggestions(
-            missing, api_issues, code_issues, evidence_hits, bucket
+            missing_reqs, api_issues, code_issues, evidence_hits, bucket, request
         )
-        next_action = (
-            "다음 미션을 진행해도 됩니다."
-            if passed
-            else "지적된 부분을 보완한 후 재제출하세요."
+        next_action = self._build_next_action(
+            passed=passed,
+            missing_reqs=missing_reqs,
+            api_issues=api_issues,
+            code_issues=code_issues,
+            critical_issues=critical_issues,
+            bucket=bucket,
+            mission_title=(request.mission.title or "").strip(),
         )
 
         return MissionFeedbackResponse(
@@ -168,7 +182,7 @@ class MissionFeedbackGrader:
             score=score,
             summary=summary,
             satisfiedRequirements=satisfied,
-            missingRequirements=missing,
+            missingRequirements=missing_requirements,
             apiSpecIssues=api_issues,
             codeIssues=code_issues,
             improvementSuggestions=improvement_suggestions,
@@ -178,21 +192,28 @@ class MissionFeedbackGrader:
     def _empty_submission_response(
         self, request: MissionFeedbackRequest
     ) -> MissionFeedbackResponse:
+        missing_requirements = [
+            self._format_missing_requirement(req) for req in request.requirements
+        ]
         return MissionFeedbackResponse(
             passed=False,
             score=0,
-            summary="제출된 코드가 없습니다.",
+            summary=(
+                "제출된 코드가 없어 미션을 평가할 수 없습니다. "
+                "Controller·Service·Repository 흐름이 포함된 파일을 먼저 작성해야 합니다."
+            ),
             satisfiedRequirements=[],
-            missingRequirements=[req.name for req in request.requirements],
+            missingRequirements=missing_requirements,
             apiSpecIssues=[
-                f"{spec.method} {spec.endpoint} 미구현"
+                self._format_api_spec_issue(spec.method or "GET", spec.endpoint or "/")
                 for spec in request.apiSpecs
             ],
             codeIssues=[],
             improvementSuggestions=[
-                "제출한 코드 파일이 비어 있지 않은지 확인하세요.",
+                "Controller에서 요청 DTO를 받고 Service로 비즈니스 로직을 분리하는 "
+                "최소 구조부터 작성하세요.",
             ],
-            nextAction="코드를 작성한 뒤 다시 제출해 주세요.",
+            nextAction="미션에 맞는 Controller·Service 파일을 작성한 뒤 다시 제출하세요.",
         )
 
     def _grade_requirements(
@@ -200,9 +221,9 @@ class MissionFeedbackGrader:
         request: MissionFeedbackRequest,
         merged_lower: str,
         bucket: str,
-    ) -> tuple[list[str], list[str], float]:
+    ) -> tuple[list[str], list[RequirementSchema], float]:
         satisfied: list[str] = []
-        missing: list[str] = []
+        missing: list[RequirementSchema] = []
         hints = _REQUIREMENT_HINTS.get(bucket, ())
 
         for req in request.requirements:
@@ -219,13 +240,127 @@ class MissionFeedbackGrader:
             if hit:
                 satisfied.append(req.name)
             else:
-                missing.append(req.name)
+                missing.append(req)
 
         total = len(request.requirements)
         if total == 0:
             return satisfied, missing, 50.0
         ratio = len(satisfied) / total
         return satisfied, missing, ratio * 100
+
+    @staticmethod
+    def _format_missing_requirement(req: RequirementSchema) -> str:
+        name = (req.name or "요구사항").strip()
+        related = (req.relatedScreenOrApi or "").strip()
+        description = (req.description or "").strip()
+
+        if related.upper().startswith(("POST", "GET", "PUT", "DELETE", "PATCH")):
+            return (
+                f"'{name}' 요구사항이 코드에서 확인되지 않습니다. "
+                f"기능 검증을 위해 {related} 구현이 필요합니다."
+            )
+        if related:
+            return (
+                f"'{name}' 요구사항이 코드에서 확인되지 않습니다. "
+                f"{related} 계층/화면에 관련 로직이 반영되어야 합니다."
+            )
+        if description:
+            short_desc = description[:80] + ("..." if len(description) > 80 else "")
+            return (
+                f"'{name}' 요구사항이 코드에서 확인되지 않습니다. "
+                f"({short_desc})"
+            )
+        return f"'{name}' 요구사항이 제출 코드에서 확인되지 않습니다."
+
+    @staticmethod
+    def _format_api_spec_issue(method: str, endpoint: str) -> str:
+        return (
+            f"{method.upper()} {endpoint} API가 코드에서 확인되지 않습니다. "
+            f"Controller에 해당 method/endpoint 매핑을 추가하세요."
+        )
+
+    def _build_summary(
+        self,
+        *,
+        passed: bool,
+        score: int,
+        satisfied_count: int,
+        total_requirements: int,
+        evidence_hits: list[str],
+        api_issues: list[str],
+        code_issues: list[CodeIssueSchema],
+        critical_issues: list[str],
+        missing_reqs: list[RequirementSchema],
+        bucket: str,
+    ) -> str:
+        fulfillment = (
+            f"요구사항 {satisfied_count}/{total_requirements} 충족, "
+            f"구현 근거(evidence) {len(evidence_hits)}건 확인"
+        )
+
+        top_problems: list[str] = []
+        if critical_issues:
+            top_problems.extend(critical_issues[:2])
+        elif api_issues:
+            top_problems.append(api_issues[0])
+        elif missing_reqs:
+            top_problems.append(self._format_missing_requirement(missing_reqs[0]))
+        elif code_issues:
+            top_problems.append(code_issues[0].message)
+
+        if passed:
+            next_hint = "다음 미션으로 넘어가도 됩니다."
+            if bucket == "signup" and "password_hash" not in evidence_hits:
+                next_hint = "비밀번호 해시 저장 여부를 한 번 더 점검한 뒤 다음 미션으로 진행하세요."
+            return (
+                f"{fulfillment}. score={score}. "
+                f"핵심 Controller·API·Service 구조가 확인됩니다. {next_hint}"
+            )
+
+        problem_text = " / ".join(top_problems[:2]) if top_problems else "핵심 구현 요소가 부족합니다."
+        first_fix = self._primary_fix_hint(
+            missing_reqs=missing_reqs,
+            api_issues=api_issues,
+            code_issues=code_issues,
+            critical_issues=critical_issues,
+            bucket=bucket,
+        )
+        return (
+            f"{fulfillment}, apiSpec 이슈 {len(api_issues)}건, "
+            f"코드 이슈 {len(code_issues)}건. score={score}. "
+            f"가장 큰 문제: {problem_text}. "
+            f"우선 수정: {first_fix}"
+        )
+
+    @staticmethod
+    def _primary_fix_hint(
+        *,
+        missing_reqs: list[RequirementSchema],
+        api_issues: list[str],
+        code_issues: list[CodeIssueSchema],
+        critical_issues: list[str],
+        bucket: str,
+    ) -> str:
+        if any("Controller" in issue for issue in critical_issues):
+            return "Controller 클래스(@RestController)를 추가하고 API endpoint를 매핑하세요."
+        if any("endpoint" in issue.lower() for issue in critical_issues):
+            defaults = {
+                "signup": "POST /api/auth/signup endpoint를 Controller에 추가하세요.",
+                "crud": "GET /api/posts endpoint를 Controller에 추가하세요.",
+                "jwt_auth": "POST /api/auth/login endpoint를 Controller에 추가하세요.",
+            }
+            return defaults.get(bucket, "핵심 API endpoint를 Controller에 매핑하세요.")
+        if api_issues:
+            return api_issues[0]
+        if code_issues:
+            return code_issues[0].suggestion or code_issues[0].message
+        if missing_reqs:
+            req = missing_reqs[0]
+            related = (req.relatedScreenOrApi or "").strip()
+            if related:
+                return f"'{req.name}' 요구사항을 충족하도록 {related} 관련 코드를 추가하세요."
+            return f"'{req.name}' 요구사항을 코드에 반영하세요."
+        return "Controller → Service → Repository 흐름부터 다시 정리하세요."
 
     @staticmethod
     def _requirement_tokens(
@@ -327,7 +462,7 @@ class MissionFeedbackGrader:
                 matched += 1
             else:
                 issues.append(
-                    f"{method} {endpoint} endpoint 가 제출 코드에서 발견되지 않습니다."
+                    self._format_api_spec_issue(method, endpoint)
                 )
 
         total = len(request.apiSpecs)
@@ -411,12 +546,12 @@ class MissionFeedbackGrader:
                     line=None,
                     severity="warning",
                     message=(
-                        "코드에 'password' 가 등장하지만 해시/암호화 관련 키워드"
-                        "(encrypt, hash, bcrypt, PasswordEncoder 등) 가 발견되지 않았습니다."
+                        "비밀번호 처리 코드에 해시/암호화 키워드가 없습니다. "
+                        "평문 저장·로그 노출 위험이 있습니다."
                     ),
                     suggestion=(
-                        "BCrypt 등 단방향 해시 알고리즘을 사용하고 비밀번호 평문 저장·노출"
-                        "을 피하세요."
+                        "PasswordEncoder(BCrypt 등)로 encode() 후 저장하고, "
+                        "응답·로그에 비밀번호를 노출하지 마세요."
                     ),
                 )
             )
@@ -424,29 +559,87 @@ class MissionFeedbackGrader:
 
     @staticmethod
     def _build_suggestions(
-        missing: list[str],
+        missing_reqs: list[RequirementSchema],
         api_issues: list[str],
         code_issues: list[CodeIssueSchema],
         evidence_hits: list[str],
         bucket: str,
+        request: MissionFeedbackRequest,
     ) -> list[str]:
         suggestions: list[str] = []
-        if missing:
-            suggestions.append(
-                "다음 요구사항을 코드에 반영하세요: " + ", ".join(missing[:5])
-            )
+        if missing_reqs:
+            first = missing_reqs[0]
+            related = (first.relatedScreenOrApi or "").strip()
+            if related.upper().startswith(("POST", "GET", "PUT", "DELETE", "PATCH")):
+                suggestions.append(
+                    f"'{first.name}' 요구사항을 충족하도록 {related} endpoint와 "
+                    f"연결된 Service 로직을 추가하세요."
+                )
+            else:
+                suggestions.append(
+                    f"'{first.name}' 요구사항을 코드에 반영하세요. "
+                    f"관련 위치: {related or 'Controller/Service'}"
+                )
+            if len(missing_reqs) > 1:
+                others = ", ".join(req.name for req in missing_reqs[1:4])
+                suggestions.append(f"이어서 다음 요구사항도 확인하세요: {others}")
         if api_issues:
             suggestions.append(
-                "API 명세서의 method/endpoint 와 코드 구현을 일치시키세요."
+                "Controller의 @PostMapping/@GetMapping 등 HTTP method 매핑이 "
+                "apiSpec endpoint와 일치하는지 대조하세요."
             )
         if code_issues:
-            suggestions.append(
-                "보안·예외 처리 등 코드 이슈를 우선 해결하세요."
-            )
+            for issue in code_issues[:2]:
+                suggestions.append(issue.suggestion or issue.message)
         if not suggestions:
+            mission_title = (request.mission.title or "현재 미션").strip()
             suggestions.append(
-                "기본 요구사항을 충족했습니다. 다음 미션으로 도전해 보세요."
+                f"'{mission_title}' 핵심 요구사항을 충족했습니다. "
+                f"다음 미션에서 예외 처리·검증 강화를 연습해 보세요."
             )
         if bucket == "signup" and "password_hash" not in evidence_hits:
-            suggestions.append("PasswordEncoder로 비밀번호를 해시 저장하는지 확인하세요.")
+            suggestions.append(
+                "SignupService에서 PasswordEncoder.encode()로 비밀번호를 해시 저장하는지 확인하세요."
+            )
         return suggestions
+
+    @staticmethod
+    def _build_next_action(
+        *,
+        passed: bool,
+        missing_reqs: list[RequirementSchema],
+        api_issues: list[str],
+        code_issues: list[CodeIssueSchema],
+        critical_issues: list[str],
+        bucket: str,
+        mission_title: str,
+    ) -> str:
+        if passed:
+            if bucket == "jwt_auth":
+                return "토큰 만료·리프레시 정책을 추가해 JWT 인증 흐름을 심화 학습하세요."
+            if bucket == "crud":
+                return "404/400 예외 응답을 추가해 CRUD API 완성도를 높여 보세요."
+            if bucket == "signup":
+                return "입력값 검증(@Valid)과 중복 이메일(409) 처리를 점검한 뒤 다음 미션으로 진행하세요."
+            return f"'{mission_title or '현재 미션'}'을 충족했습니다. 다음 미션으로 진행하세요."
+
+        if any("Controller" in issue for issue in critical_issues):
+            return "가장 먼저 @RestController 클래스를 만들고 API endpoint를 매핑하세요."
+        if any("endpoint" in issue.lower() for issue in critical_issues):
+            defaults = {
+                "signup": "가장 먼저 POST /api/auth/signup endpoint를 Controller에 추가하세요.",
+                "crud": "가장 먼저 GET /api/posts endpoint를 Controller에 추가하세요.",
+                "jwt_auth": "가장 먼저 POST /api/auth/login endpoint를 Controller에 추가하세요.",
+            }
+            return defaults.get(bucket, "가장 먼저 핵심 API endpoint를 Controller에 매핑하세요.")
+        if api_issues:
+            return f"가장 먼저 {api_issues[0].split(' API')[0]} 구현부터 맞추세요."
+        if code_issues:
+            return f"가장 먼저 {code_issues[0].suggestion or code_issues[0].message}"
+        if missing_reqs:
+            req = missing_reqs[0]
+            related = (req.relatedScreenOrApi or "").strip()
+            if related:
+                return f"가장 먼저 '{req.name}' 요구사항을 충족하도록 {related} 관련 코드를 추가하세요."
+            return f"가장 먼저 '{req.name}' 요구사항을 코드에 반영하세요."
+        return "Controller → Service → Repository 순서로 최소 동작 흐름을 완성한 뒤 재제출하세요."

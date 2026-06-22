@@ -38,13 +38,13 @@ class EvaluationService:
             choices=request.question.choices,
         )
 
-        feedback = (
-            "정답입니다. 잘 하셨어요."
-            if is_correct
-            else "오답입니다. 해설을 확인하고 다시 시도해 보세요."
+        feedback = self._build_quiz_feedback(
+            is_correct=is_correct,
+            score=score,
+            correct_answer=correct_answer,
+            user_answer=user_answer,
+            related_section=request.question.relatedSection,
         )
-        if not is_correct and score >= 50:
-            feedback = "핵심 키워드는 맞지만 표현이 정답과 다릅니다. 해설을 참고하세요."
 
         return QuizGradeResponse(
             isCorrect=is_correct,
@@ -53,10 +53,99 @@ class EvaluationService:
             correctAnswer=correct_answer,
             explanation=(
                 request.question.explanation
-                or "(mock) 정답 해설은 기능템플릿의 requirements / apiSpec / flow 를 "
-                "참고해 작성되어야 합니다. 본문에 없는 새 개념은 도입하지 않습니다."
+                or self._build_explanation_fallback(
+                    correct_answer=correct_answer,
+                    related_section=request.question.relatedSection,
+                    question_text=(request.question.question or "").strip(),
+                )
             ),
             relatedSection=request.question.relatedSection,
+        )
+
+    @staticmethod
+    def _section_label(related_section: str | None) -> str:
+        labels = {
+            "overview": "개요(overview)",
+            "requirements": "요구사항(requirements)",
+            "flow": "흐름(flow)",
+            "apiSpec": "API 명세(apiSpec)",
+            "codeFiles": "코드(codeFiles)",
+            "basicQuestions": "기본 문제(basicQuestions)",
+            "missions": "미션(missions)",
+            "interviewQuestions": "면접 질문(interviewQuestions)",
+            "nextRecommendations": "다음 추천(nextRecommendations)",
+        }
+        if not related_section:
+            return "기능템플릿"
+        return labels.get(related_section, related_section)
+
+    def _build_quiz_feedback(
+        self,
+        *,
+        is_correct: bool,
+        score: int,
+        correct_answer: str,
+        user_answer: str,
+        related_section: str | None,
+    ) -> str:
+        section_label = self._section_label(related_section)
+
+        if is_correct:
+            if score >= 100:
+                return (
+                    f"정답입니다. '{correct_answer}' 핵심 개념을 정확히 짚었습니다. "
+                    f"{section_label} 내용을 잘 이해하고 있습니다."
+                )
+            return (
+                f"정답으로 인정됩니다. 핵심 표현은 맞지만, "
+                f"정답 '{correct_answer}'처럼 더 명확히 정리하면 좋습니다."
+            )
+
+        if score >= 50:
+            missing = self._missing_answer_keywords(correct_answer, user_answer)
+            if missing:
+                missing_text = ", ".join(sorted(missing)[:4])
+                return (
+                    f"핵심 키워드 일부는 맞지만 정답 표현이 부족합니다. "
+                    f"부족한 키워드: {missing_text}. "
+                    f"{section_label} 섹션과 정답 '{correct_answer}'를 다시 비교해 보세요."
+                )
+            return (
+                f"핵심 방향은 맞지만 정답 '{correct_answer}'와 표현이 다릅니다. "
+                f"{section_label} 섹션에서 용어를 다시 확인해 보세요."
+            )
+
+        if not user_answer.strip():
+            return (
+                f"답이 비어 있습니다. {section_label} 섹션을 참고해 "
+                f"'{correct_answer}'와 연결되는 개념을 작성해 보세요."
+            )
+
+        return (
+            f"오답입니다. '{user_answer}'는 정답 '{correct_answer}'와 핵심이 다릅니다. "
+            f"{section_label} 섹션에서 관련 개념을 다시 정리한 뒤 재시도하세요."
+        )
+
+    @staticmethod
+    def _missing_answer_keywords(correct_answer: str, user_answer: str) -> set[str]:
+        correct_keywords = extract_answer_keywords(correct_answer)
+        user_keywords = extract_answer_keywords(user_answer)
+        return correct_keywords - user_keywords
+
+    @staticmethod
+    def _build_explanation_fallback(
+        *,
+        correct_answer: str,
+        related_section: str | None,
+        question_text: str,
+    ) -> str:
+        section_label = EvaluationService._section_label(related_section)
+        question_hint = f"문제 '{question_text}'의 " if question_text else ""
+        return (
+            f"{question_hint}정답은 '{correct_answer}'입니다. "
+            f"{section_label} 섹션에서 해당 개념이 왜 필요한지, "
+            f"어떤 입력·처리·결과 흐름과 연결되는지 다시 읽어 보세요. "
+            f"기능템플릿에 없는 새 개념은 추가하지 말고, 템플릿 근거로 이해를 정리하세요."
         )
 
     def _grade_answer(
