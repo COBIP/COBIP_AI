@@ -99,9 +99,17 @@ class MissionFeedbackResponse(BaseModel):
 
 
 class CodeAnalyzeRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     code: str
     language: str
     context: str | None = None
+    # 제출 전 분석 강화를 위한 optional 컨텍스트 (없어도 기존 동작 유지).
+    requirements: list[str] = Field(default_factory=list)
+    missionTitle: str | None = None
+    missionDescription: str | None = None
+    successCriteria: list[str] = Field(default_factory=list)
+    submittedCode: list[SubmittedCodeSchema] = Field(default_factory=list)
 
 
 class CodeAnalyzeResponse(BaseModel):
@@ -109,6 +117,11 @@ class CodeAnalyzeResponse(BaseModel):
     explanation: str
     potentialIssues: list[str]
     improvementSuggestions: list[str]
+    # 오답피드백 optional 필드 (요구사항/successCriteria 미제공 시 빈 배열).
+    satisfiedRequirements: list[str] = Field(default_factory=list)
+    missingRequirements: list[str] = Field(default_factory=list)
+    incorrectParts: list[str] = Field(default_factory=list)
+    wrongAnswerFeedback: list[str] = Field(default_factory=list)
 
 
 class InterviewFeedbackRequest(BaseModel):

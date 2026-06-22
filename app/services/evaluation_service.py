@@ -11,6 +11,7 @@ from app.schemas.evaluation import (
     QuizGradeRequest,
     QuizGradeResponse,
 )
+from app.services.code_analyze_service import CodeAnalyzeService
 from app.services.evaluation_payload_normalizer import (
     extract_answer_keywords,
     normalize_answer_text,
@@ -379,34 +380,9 @@ class EvaluationService:
         return len(correct_keywords & user_keywords) / len(correct_keywords)
 
     def analyze_code(self, request: CodeAnalyzeRequest) -> CodeAnalyzeResponse:
-        code = request.code or ""
-        char_count = len(code)
-        line_count = code.count("\n") + 1 if code else 0
+        """제출 전 코드리뷰 + 오답피드백 (LLM 우선, 실패 시 rule fallback).
 
-        summary = (
-            f"(mock) {request.language} 코드 약 {line_count}줄 / {char_count}자 "
-            "분석 요약입니다."
-        )
-        explanation = (
-            "(mock) 제출된 코드의 구조·의도·계층 책임을 요약 설명합니다. "
-            "실제로는 LLM 분석 결과로 대체됩니다."
-        )
-
-        potential_issues: list[str] = []
-        if code.strip():
-            potential_issues.append(
-                "(mock) 잠재적 이슈 예시 — 실제 분석 결과로 대체됩니다."
-            )
-
-        improvement_suggestions = [
-            "(mock) 단일 책임 원칙 준수 여부 점검",
-            "(mock) 입력값 검증 누락 여부 확인",
-            "(mock) 예외 처리 및 응답 포맷 일관성 점검",
-        ]
-
-        return CodeAnalyzeResponse(
-            summary=summary,
-            explanation=explanation,
-            potentialIssues=potential_issues,
-            improvementSuggestions=improvement_suggestions,
-        )
+        실제 분석 로직은 CodeAnalyzeService 가 담당한다. 채점(passed/score)은
+        다루지 않으며, 그 책임은 /ai/mission/feedback 에 있다.
+        """
+        return CodeAnalyzeService().analyze(request)
