@@ -361,6 +361,74 @@ class TestMissionFeedbackGrader:
         result = MissionFeedbackService().generate_feedback(req)
         assert result.passed is False
 
+    def test_failed_feedback_is_coaching_style(self) -> None:
+        """불합격: summary가 문제+수정방향을 설명하고, missing/suggestion/nextAction이 구체적."""
+        bad = [
+            {
+                "fileName": "OnlyService.java",
+                "filePath": None,
+                "language": "java",
+                "content": "class OnlyService { void run() {} }",
+            }
+        ]
+        req = MissionFeedbackRequest(**_base_mission_payload("회원가입", bad))
+        result = MissionFeedbackService().generate_feedback(req)
+
+        # summary는 점수만이 아니라 가장 큰 문제 + 수정 방향을 설명한다.
+        assert "evidence" in result.summary
+        assert "가장 큰 문제" in result.summary
+        assert "수정 방향" in result.summary
+
+        # missingRequirements는 이름 나열이 아니라 이유 + 구현 위치를 포함한다.
+        assert result.missingRequirements
+        assert any("필요하며" in item and "구현" in item for item in result.missingRequirements)
+
+        # improvementSuggestions는 바로 따라 할 수 있는 액션 문장이다.
+        assert result.improvementSuggestions
+        assert any(
+            ("@Valid" in s) or ("PasswordEncoder" in s) or ("repository" in s)
+            for s in result.improvementSuggestions
+        )
+
+        # nextAction은 가장 먼저 할 일 하나를 제시한다.
+        assert result.nextAction.startswith("가장 먼저")
+
+    def test_passed_summary_and_next_action_are_descriptive(self) -> None:
+        req = MissionFeedbackRequest(
+            **_base_mission_payload("회원가입", _signup_canonical_submitted())
+        )
+        result = MissionFeedbackService().generate_feedback(req)
+        assert result.passed is True
+        assert "통과" in result.summary
+        assert len(result.nextAction) > 15
+
+    def test_password_code_issue_has_cause_impact_fix(self) -> None:
+        insecure = [
+            {
+                "fileName": "SignupController.java",
+                "filePath": None,
+                "language": "java",
+                "content": (
+                    '@RestController\n'
+                    '@RequestMapping("/api/auth")\n'
+                    'class SignupController {\n'
+                    '  @PostMapping("/signup")\n'
+                    '  String signup(@RequestBody SignupRequest r) {\n'
+                    '    String password = r.getPassword();\n'
+                    '    repository.save(password);\n'
+                    '    return "ok";\n'
+                    '  }\n'
+                    '}\n'
+                ),
+            }
+        ]
+        req = MissionFeedbackRequest(**_base_mission_payload("회원가입", insecure))
+        result = MissionFeedbackService().generate_feedback(req)
+        assert result.codeIssues
+        issue = result.codeIssues[0]
+        assert "원인" in issue.message and "영향" in issue.message
+        assert "수정" in issue.suggestion
+
     def test_missing_controller_fails(self) -> None:
         bad = [
             {
