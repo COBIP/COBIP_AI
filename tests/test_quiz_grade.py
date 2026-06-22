@@ -79,6 +79,22 @@ class TestQuizGradeService:
         req = QuizGradeRequest(**_quiz_payload(userAnswer="평문 저장"))
         result = EvaluationService().grade_quiz(req)
         assert result.isCorrect is False
+        assert "오답" in result.feedback
+        assert "평문 저장" in result.feedback
+
+    def test_feedback_includes_section_context(self) -> None:
+        req = QuizGradeRequest(**_quiz_payload())
+        result = EvaluationService().grade_quiz(req)
+        assert "requirements" in result.feedback
+
+    def test_explanation_fallback_uses_correct_answer_and_section(self) -> None:
+        payload = _quiz_payload()
+        payload["question"] = dict(payload["question"])
+        payload["question"]["explanation"] = ""
+        req = QuizGradeRequest(**payload)
+        result = EvaluationService().grade_quiz(req)
+        assert "BCrypt 해시" in result.explanation
+        assert "requirements" in result.explanation
 
     def test_fe_related_api_specs_shape_no_422(self) -> None:
         QuizGradeRequest(**_quiz_payload())
