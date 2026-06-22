@@ -325,6 +325,23 @@ class TestMissionFeedbackGrader:
         assert result.codeIssues == []
         assert result.passed is True
         assert "evidence" in result.summary
+        assert "통과" in result.summary
+        assert "다음 미션" in result.nextAction
+
+    def test_missing_requirement_message_is_actionable(self) -> None:
+        bad = [
+            {
+                "fileName": "OnlyService.java",
+                "filePath": None,
+                "language": "java",
+                "content": "class OnlyService { void run() {} }",
+            }
+        ]
+        req = MissionFeedbackRequest(**_base_mission_payload("회원가입", bad))
+        result = MissionFeedbackService().generate_feedback(req)
+        assert result.missingRequirements
+        assert any("요구사항" in item for item in result.missingRequirements)
+        assert result.nextAction.startswith("가장 먼저")
 
     def test_crud_canonical_passes(self) -> None:
         req = MissionFeedbackRequest(
