@@ -1,7 +1,9 @@
 """POST /ai/code/analyze 전용 분석 service.
 
 제출 전 단계의 코드리뷰 + 오답피드백을 생성한다.
-- 기본 경로: 기존 LLMService.generate_json() 으로 JSON 응답을 받아 정규화한다.
+- 기본 경로: code analyze 전용으로 Ollama native /api/chat 엔드포인트를 직접 호출해
+  JSON 응답을 받아 정규화한다. (OpenAI-호환 /v1/chat/completions 경로의 연결 끊김
+  회피용. LLMService.generate_json 의 기존 동작은 변경하지 않는다.)
 - LLM 미설정/타임아웃/파싱 실패 시: 코드·언어·context·requirements 기반의 최소 분석을
   fallback 으로 반환한다.
 - 어떤 경로에서도 "(mock)" 문구는 출력하지 않는다.
@@ -12,6 +14,8 @@
 from __future__ import annotations
 
 import logging
+
+import httpx
 
 from app.core.config import settings
 from app.prompts.code_analyze_prompts import build_code_analyze_prompt
@@ -74,11 +78,7 @@ class CodeAnalyzeService:
         )
 
         try:
-            raw = self._llm_service.generate_json(
-                prompt,
-                timeout_seconds=settings.LLM_TIMEOUT_SECONDS,
-                max_tokens=settings.CODE_ANALYZE_MAX_TOKENS,
-            )
+            raw = self._call_native_ollama(prompt)
         except RuntimeError as exc:
             logger.warning(
                 "code analyze source=fallback reason=llm_error errorType=%s detail=%s",
@@ -112,6 +112,91 @@ class CodeAnalyzeService:
             requirements=requirements,
             success_criteria=success_criteria,
         )
+
+    # ------------------------------------------------------------------
+    # native Ollama 호출 (code analyze 전용)
+    # ------------------------------------------------------------------
+    def _call_native_ollama(self, prompt: str) -> dict:
+        """code analyze 전용 Ollama native /api/chat 호출.
+
+        LLMService(OpenAI-호환 /v1/chat/completions) 대신 native /api/chat 경로를
+        사용한다. 운영 환경에서 /v1/chat/completions 경로가 'Server disconnected' 로
+        끊기는 문제를 회피하기 위한 code analyze 전용 우회 경로다.
+
+        - OLLAMA_BASE_URL 미설정 시: mock dict 를 반환해 fallback 으로 유도한다.
+        - 응답은 response["message"]["content"] 에서 꺼내고, 기존 JSON 추출/정규화
+          로직(LLMService._parse_json_object)을 그대로 재사용한다.
+        - 네트워크/HTTP/타임아웃 오류는 RuntimeError 로 통일해 던진다.
+        """
+        if not settings.OLLAMA_BASE_URL:
+            return {"mock": True, "warning": "OLLAMA_BASE_URL 미설정"}
+
+        url = self._native_chat_url(settings.OLLAMA_BASE_URL)
+        payload = {
+            "model": settings.OLLAMA_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "options": {
+                "temperature": 0.2,
+                "num_predict": settings.CODE_ANALYZE_MAX_TOKENS,
+            },
+        }
+        timeout = settings.LLM_TIMEOUT_SECONDS
+
+        logger.info(
+            "code analyze native ollama call url=%s model=%s",
+            url,
+            settings.OLLAMA_MODEL,
+        )
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(f"LLM 호출 타임아웃 ({timeout}s 초과)") from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                "LLM 호출 실패: "
+                f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"LLM 호출 네트워크 오류: {exc}") from exc
+
+        content = self._extract_native_content(data)
+        # 기존 JSON 추출/정규화 로직 재사용.
+        return LLMService._parse_json_object(content)
+
+    @staticmethod
+    def _native_chat_url(base_url: str) -> str:
+        """OLLAMA_BASE_URL 에서 trailing /v1 을 제거하고 /api/chat 경로를 만든다.
+
+        예) http://172.18.0.1:11436/v1 -> http://172.18.0.1:11436/api/chat
+        """
+        root = base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[: -len("/v1")]
+        return f"{root.rstrip('/')}/api/chat"
+
+    @staticmethod
+    def _extract_native_content(data: object) -> str:
+        """Ollama native /api/chat 응답에서 message.content 를 안전하게 꺼낸다."""
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"Ollama native 응답 형식이 올바르지 않습니다: {data!r}"
+            )
+        message = data.get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError(
+                f"Ollama native 응답에 message 객체가 없습니다: {data!r}"
+            )
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError(
+                "Ollama native 응답 content 가 문자열이 아닙니다: "
+                f"{type(content).__name__}"
+            )
+        return content
 
     # ------------------------------------------------------------------
     # input handling
