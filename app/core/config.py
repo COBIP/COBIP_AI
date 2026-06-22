@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: int = 60
     FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS: int = 120
 
+    # /ai/code/analyze 안정성: 작은 토큰 상한 + 입력 코드 길이 제한으로
+    # 터널 경유 장시간 생성·연결 끊김(Server disconnected)을 방지한다.
+    CODE_ANALYZE_MAX_TOKENS: int = 800
+    CODE_ANALYZE_MAX_CODE_CHARS: int = 4000
+
     CACHE_TTL_SECONDS: int = 3600
     RATE_LIMIT_PER_MINUTE: int = 30
 

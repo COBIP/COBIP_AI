@@ -56,7 +56,7 @@ class CodeAnalyzeService:
         self._llm_service = llm_service or LLMService()
 
     def analyze(self, request: CodeAnalyzeRequest) -> CodeAnalyzeResponse:
-        code = self._resolve_code(request)
+        code = self._truncate_code(self._resolve_code(request))
         requirements = self._clean_list(request.requirements)
         success_criteria = self._clean_list(request.successCriteria)
 
@@ -77,11 +77,13 @@ class CodeAnalyzeService:
             raw = self._llm_service.generate_json(
                 prompt,
                 timeout_seconds=settings.LLM_TIMEOUT_SECONDS,
+                max_tokens=settings.CODE_ANALYZE_MAX_TOKENS,
             )
         except RuntimeError as exc:
             logger.warning(
-                "code analyze LLM call failed; using fallback: errorType=%s",
+                "code analyze source=fallback reason=llm_error errorType=%s detail=%s",
                 type(exc).__name__,
+                str(exc),
             )
             return self._fallback_response(
                 code=code,
@@ -92,7 +94,7 @@ class CodeAnalyzeService:
             )
 
         if not self._looks_like_llm_payload(raw):
-            logger.info("code analyze LLM payload not usable; using fallback")
+            logger.info("code analyze source=fallback reason=unusable_payload")
             return self._fallback_response(
                 code=code,
                 language=request.language,
@@ -101,6 +103,7 @@ class CodeAnalyzeService:
                 success_criteria=success_criteria,
             )
 
+        logger.info("code analyze source=llm reason=llm_ok")
         return self._normalize_llm_response(
             raw,
             code=code,
@@ -123,6 +126,14 @@ class CodeAnalyzeService:
             f"// {f.fileName}\n{f.content}" for f in files if f.content and f.content.strip()
         )
         return merged
+
+    @staticmethod
+    def _truncate_code(code: str) -> str:
+        """프롬프트 안정화를 위해 입력 코드를 길이 상한으로 자른다."""
+        limit = settings.CODE_ANALYZE_MAX_CODE_CHARS
+        if len(code) <= limit:
+            return code
+        return code[:limit] + "\n// ...(이하 생략: 길이 제한으로 일부만 분석)"
 
     @staticmethod
     def _clean_list(values: list[str]) -> list[str]:

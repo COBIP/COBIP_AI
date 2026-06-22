@@ -11,11 +11,15 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.main import app
+from app.prompts.code_analyze_prompts import build_code_analyze_prompt
 from app.schemas.evaluation import CodeAnalyzeRequest
 from app.services.code_analyze_service import CodeAnalyzeService
 
 _GENERATE_JSON_TARGET = "app.services.code_analyze_service.LLMService.generate_json"
+
+_FALLBACK_PHRASE = "AI 상세 분석을 사용할 수 없어"
 
 _SIGNUP_CODE = (
     "public class SignupService {\n"
@@ -210,3 +214,83 @@ class TestCodeAnalyzeApi:
         assert resp.status_code == 200
         assert resp.json()["success"] is True
         _assert_no_mock(resp.json())
+
+
+# ----------------------------------------------------------------------
+# 프롬프트 안정화 (hotfix): max_tokens, 코드펜스 제거, truncate, 문구 구분
+# ----------------------------------------------------------------------
+class TestCodeAnalyzeStability:
+    def test_generate_json_called_with_max_tokens_800(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict = {}
+
+        def fake_generate_json(_self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            captured["kwargs"] = kwargs
+            return _llm_payload()
+
+        monkeypatch.setattr(_GENERATE_JSON_TARGET, fake_generate_json)
+        CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
+        )
+        assert captured["kwargs"].get("max_tokens") == 800
+        assert settings.CODE_ANALYZE_MAX_TOKENS == 800
+
+    def test_prompt_has_no_code_fence(self) -> None:
+        prompt = build_code_analyze_prompt(
+            code=_SIGNUP_CODE,
+            language="java",
+            context="회원가입",
+            mission_title="회원가입",
+            mission_description="설명",
+            requirements=["이메일 중복 검사"],
+            success_criteria=["중복 막기"],
+        )
+        assert "```" not in prompt
+        assert "[현재 코드 시작]" in prompt
+        assert "[현재 코드 끝]" in prompt
+
+    def test_long_code_truncated_before_prompt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict = {}
+
+        def fake_generate_json(_self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return _llm_payload()
+
+        monkeypatch.setattr(_GENERATE_JSON_TARGET, fake_generate_json)
+        long_code = "int x = 0;\n" * 1000  # 약 11,000자 > 4000
+        CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=long_code, language="java")
+        )
+        prompt = captured["prompt"]
+        # 원본 전체가 그대로 실리지 않고 truncate 마커가 있어야 한다.
+        assert "이하 생략" in prompt
+        assert len(prompt) < len(long_code)
+        assert settings.CODE_ANALYZE_MAX_CODE_CHARS == 4000
+
+    def test_llm_success_has_no_fallback_phrase(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_GENERATE_JSON_TARGET, lambda *_a, **_k: _llm_payload())
+        result = CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
+        )
+        text = json.dumps(result.model_dump(), ensure_ascii=False)
+        assert _FALLBACK_PHRASE not in text
+
+    def test_fallback_contains_phrase_but_no_mock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            _GENERATE_JSON_TARGET,
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("disconnected")),
+        )
+        result = CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
+        )
+        text = json.dumps(result.model_dump(), ensure_ascii=False)
+        assert _FALLBACK_PHRASE in text  # fallback 경로 식별
+        _assert_no_mock(result.model_dump())
