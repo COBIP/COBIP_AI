@@ -1,7 +1,11 @@
 """POST /ai/code/analyze 코드리뷰 + 오답피드백 테스트.
 
-테스트 환경에서 실제 Ollama 네트워크 호출을 막기 위해
-LLMService.generate_json 을 monkeypatch 한다.
+code analyze 는 LLMService(OpenAI-호환 /v1/chat/completions) 가 아니라
+Ollama native /api/chat 엔드포인트를 직접 호출한다.
+
+- 동작(정상/fallback) 검증: CodeAnalyzeService._call_native_ollama 를 monkeypatch.
+- native HTTP 경로(URL/payload/message.content 파싱) 검증:
+  code_analyze_service 모듈의 httpx.Client 를 가짜 클라이언트로 monkeypatch.
 """
 
 from __future__ import annotations
@@ -11,13 +15,17 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+import app.services.code_analyze_service as code_analyze_module
 from app.core.config import settings
 from app.main import app
 from app.prompts.code_analyze_prompts import build_code_analyze_prompt
 from app.schemas.evaluation import CodeAnalyzeRequest
 from app.services.code_analyze_service import CodeAnalyzeService
 
-_GENERATE_JSON_TARGET = "app.services.code_analyze_service.LLMService.generate_json"
+# code analyze 전용 native 호출 지점.
+_NATIVE_CALL_TARGET = (
+    "app.services.code_analyze_service.CodeAnalyzeService._call_native_ollama"
+)
 
 _FALLBACK_PHRASE = "AI 상세 분석을 사용할 수 없어"
 
@@ -56,15 +64,51 @@ def _assert_no_mock(body: dict) -> None:
     assert "(mock)" not in text
 
 
+def _raise_llm_error(*_a, **_k):
+    raise RuntimeError("llm down")
+
+
 # ----------------------------------------------------------------------
-# service 단위 (fallback 경로: generate_json 실패 유도)
+# native /api/chat HTTP 경로 가짜 클라이언트
+# ----------------------------------------------------------------------
+class _FakeResponse:
+    def __init__(self, data: dict, status_code: int = 200) -> None:
+        self._data = data
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._data
+
+
+class _FakeClient:
+    """httpx.Client 대체: post 호출 URL/payload 를 캡처하고 고정 응답을 반환한다."""
+
+    captured: dict = {}
+    response_content: str = json.dumps(_llm_payload(), ensure_ascii=False)
+
+    def __init__(self, *_a, **_k) -> None:
+        pass
+
+    def __enter__(self) -> "_FakeClient":
+        return self
+
+    def __exit__(self, *_a) -> bool:
+        return False
+
+    def post(self, url: str, json: dict | None = None) -> _FakeResponse:  # noqa: A002
+        _FakeClient.captured = {"url": url, "payload": json}
+        return _FakeResponse({"message": {"content": _FakeClient.response_content}})
+
+
+# ----------------------------------------------------------------------
+# service 단위 (fallback 경로: native 호출 실패 유도)
 # ----------------------------------------------------------------------
 class TestCodeAnalyzeFallback:
     def test_minimal_fallback_no_mock(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            _GENERATE_JSON_TARGET,
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("llm down")),
-        )
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, _raise_llm_error)
         request = CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
         result = CodeAnalyzeService().analyze(request)
 
@@ -73,10 +117,7 @@ class TestCodeAnalyzeFallback:
         _assert_no_mock(result.model_dump())
 
     def test_code_change_changes_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            _GENERATE_JSON_TARGET,
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("llm down")),
-        )
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, _raise_llm_error)
         full = CodeAnalyzeService().analyze(
             CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
         )
@@ -87,10 +128,7 @@ class TestCodeAnalyzeFallback:
         assert full.summary != empty.summary or full.potentialIssues != empty.potentialIssues
 
     def test_requirements_missing_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            _GENERATE_JSON_TARGET,
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("llm down")),
-        )
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, _raise_llm_error)
         request = CodeAnalyzeRequest(
             code=_EMPTY_SIGNUP_CODE,
             language="java",
@@ -107,7 +145,7 @@ class TestCodeAnalyzeFallback:
         _assert_no_mock(result.model_dump())
 
     def test_empty_code_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, lambda *_a, **_k: {"mock": True})
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, lambda *_a, **_k: {"mock": True})
         result = CodeAnalyzeService().analyze(
             CodeAnalyzeRequest(code="   ", language="java", requirements=["a 요구사항"])
         )
@@ -116,9 +154,9 @@ class TestCodeAnalyzeFallback:
         _assert_no_mock(result.model_dump())
 
     def test_mock_dict_payload_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # OLLAMA_BASE_URL 미설정 시 generate_json 이 반환하는 mock dict 모사.
+        # OLLAMA_BASE_URL 미설정 시 native 호출이 반환하는 mock dict 모사.
         monkeypatch.setattr(
-            _GENERATE_JSON_TARGET,
+            _NATIVE_CALL_TARGET,
             lambda *_a, **_k: {"mock": True, "warning": "...", "promptLength": 10},
         )
         result = CodeAnalyzeService().analyze(
@@ -133,7 +171,7 @@ class TestCodeAnalyzeFallback:
 # ----------------------------------------------------------------------
 class TestCodeAnalyzeLlmPath:
     def test_llm_payload_normalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, lambda *_a, **_k: _llm_payload())
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, lambda *_a, **_k: _llm_payload())
         result = CodeAnalyzeService().analyze(
             CodeAnalyzeRequest(
                 code=_SIGNUP_CODE,
@@ -149,7 +187,7 @@ class TestCodeAnalyzeLlmPath:
         payload = _llm_payload()
         payload["summary"] = "(mock) 요약"
         payload["potentialIssues"] = ["(mock) 이슈", "정상 이슈"]
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, lambda *_a, **_k: payload)
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, lambda *_a, **_k: payload)
         result = CodeAnalyzeService().analyze(
             CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
         )
@@ -158,11 +196,71 @@ class TestCodeAnalyzeLlmPath:
 
 
 # ----------------------------------------------------------------------
+# native Ollama /api/chat 호출 (URL/payload/message.content 파싱)
+# ----------------------------------------------------------------------
+class TestCodeAnalyzeNativeOllama:
+    def _patch_client(
+        self, monkeypatch: pytest.MonkeyPatch, *, base_url: str
+    ) -> None:
+        _FakeClient.captured = {}
+        _FakeClient.response_content = json.dumps(_llm_payload(), ensure_ascii=False)
+        monkeypatch.setattr(settings, "OLLAMA_BASE_URL", base_url)
+        monkeypatch.setattr(code_analyze_module.httpx, "Client", _FakeClient)
+
+    def test_native_url_strips_v1_suffix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_client(monkeypatch, base_url="http://172.18.0.1:11436/v1")
+        CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
+        )
+        assert _FakeClient.captured["url"] == "http://172.18.0.1:11436/api/chat"
+
+    def test_native_url_handles_trailing_slash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._patch_client(monkeypatch, base_url="http://172.18.0.1:11436/v1/")
+        CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
+        )
+        assert _FakeClient.captured["url"] == "http://172.18.0.1:11436/api/chat"
+
+    def test_native_payload_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_client(monkeypatch, base_url="http://172.18.0.1:11436/v1")
+        CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
+        )
+        payload = _FakeClient.captured["payload"]
+        assert payload["model"] == settings.OLLAMA_MODEL
+        assert payload["stream"] is False
+        assert payload["messages"][0]["role"] == "user"
+        assert isinstance(payload["messages"][0]["content"], str)
+        assert payload["messages"][0]["content"]  # 비어 있지 않음
+        assert len(payload["messages"]) == 1
+        assert payload["options"]["temperature"] == 0.2
+        assert payload["options"]["num_predict"] == settings.CODE_ANALYZE_MAX_TOKENS
+        assert payload["options"]["num_predict"] == 800
+
+    def test_native_message_content_parsed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._patch_client(monkeypatch, base_url="http://172.18.0.1:11436/v1")
+        # message.content 가 코드펜스로 감싼 JSON 이어도 파싱돼야 한다.
+        _FakeClient.response_content = (
+            "```json\n" + json.dumps(_llm_payload(), ensure_ascii=False) + "\n```"
+        )
+        result = CodeAnalyzeService().analyze(
+            CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
+        )
+        assert result.summary == "회원가입 서비스 코드입니다."
+        assert result.satisfiedRequirements == ["이메일 중복 검사를 수행한다"]
+        _assert_no_mock(result.model_dump())
+
+
+# ----------------------------------------------------------------------
 # API 통합 (TestClient)
 # ----------------------------------------------------------------------
 class TestCodeAnalyzeApi:
     def test_minimal_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, lambda *_a, **_k: _llm_payload())
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, lambda *_a, **_k: _llm_payload())
         client = TestClient(app)
         resp = client.post(
             "/ai/code/analyze",
@@ -177,7 +275,7 @@ class TestCodeAnalyzeApi:
         _assert_no_mock(body)
 
     def test_request_with_requirements(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, lambda *_a, **_k: _llm_payload())
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, lambda *_a, **_k: _llm_payload())
         client = TestClient(app)
         resp = client.post(
             "/ai/code/analyze",
@@ -202,10 +300,7 @@ class TestCodeAnalyzeApi:
         _assert_no_mock(resp.json())
 
     def test_api_fallback_on_llm_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            _GENERATE_JSON_TARGET,
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("llm down")),
-        )
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, _raise_llm_error)
         client = TestClient(app)
         resp = client.post(
             "/ai/code/analyze",
@@ -217,24 +312,18 @@ class TestCodeAnalyzeApi:
 
 
 # ----------------------------------------------------------------------
-# 프롬프트 안정화 (hotfix): max_tokens, 코드펜스 제거, truncate, 문구 구분
+# 프롬프트 안정화: num_predict 상한, 코드펜스 제거, truncate, 문구 구분
 # ----------------------------------------------------------------------
 class TestCodeAnalyzeStability:
-    def test_generate_json_called_with_max_tokens_800(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        captured: dict = {}
-
-        def fake_generate_json(_self, prompt, **kwargs):
-            captured["prompt"] = prompt
-            captured["kwargs"] = kwargs
-            return _llm_payload()
-
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, fake_generate_json)
+    def test_native_num_predict_is_800(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _FakeClient.captured = {}
+        _FakeClient.response_content = json.dumps(_llm_payload(), ensure_ascii=False)
+        monkeypatch.setattr(settings, "OLLAMA_BASE_URL", "http://172.18.0.1:11436/v1")
+        monkeypatch.setattr(code_analyze_module.httpx, "Client", _FakeClient)
         CodeAnalyzeService().analyze(
             CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
         )
-        assert captured["kwargs"].get("max_tokens") == 800
+        assert _FakeClient.captured["payload"]["options"]["num_predict"] == 800
         assert settings.CODE_ANALYZE_MAX_TOKENS == 800
 
     def test_prompt_has_no_code_fence(self) -> None:
@@ -256,11 +345,11 @@ class TestCodeAnalyzeStability:
     ) -> None:
         captured: dict = {}
 
-        def fake_generate_json(_self, prompt, **kwargs):
+        def fake_native(_self, prompt):
             captured["prompt"] = prompt
             return _llm_payload()
 
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, fake_generate_json)
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, fake_native)
         long_code = "int x = 0;\n" * 1000  # 약 11,000자 > 4000
         CodeAnalyzeService().analyze(
             CodeAnalyzeRequest(code=long_code, language="java")
@@ -274,7 +363,7 @@ class TestCodeAnalyzeStability:
     def test_llm_success_has_no_fallback_phrase(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(_GENERATE_JSON_TARGET, lambda *_a, **_k: _llm_payload())
+        monkeypatch.setattr(_NATIVE_CALL_TARGET, lambda *_a, **_k: _llm_payload())
         result = CodeAnalyzeService().analyze(
             CodeAnalyzeRequest(code=_SIGNUP_CODE, language="java")
         )
@@ -285,7 +374,7 @@ class TestCodeAnalyzeStability:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            _GENERATE_JSON_TARGET,
+            _NATIVE_CALL_TARGET,
             lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("disconnected")),
         )
         result = CodeAnalyzeService().analyze(
