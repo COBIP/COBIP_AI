@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 
 from app.schemas.common import ApiResponse
 from app.schemas.feature_template import (
@@ -6,6 +7,8 @@ from app.schemas.feature_template import (
     FeatureTemplateRegenerateSectionRequest,
 )
 from app.services.feature_template_generator import FeatureTemplateGenerator
+from app.services.feature_template_stream import stream_feature_template_generation
+from app.utils.sse import SSE_RESPONSE_HEADERS
 
 router = APIRouter(prefix="/ai/feature-template", tags=["feature-template"])
 
@@ -26,6 +29,17 @@ def generate_feature_template(
             **metadata,
             "fallbackUsed": result.fallbackUsed,
         },
+    )
+
+
+@router.post("/generate/stream")
+async def generate_feature_template_stream(
+    request: FeatureTemplateGenerateRequest,
+) -> StreamingResponse:
+    return StreamingResponse(
+        stream_feature_template_generation(request),
+        media_type="text/event-stream",
+        headers=SSE_RESPONSE_HEADERS,
     )
 
 

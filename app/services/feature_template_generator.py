@@ -16,6 +16,7 @@ InterviewQuestionSchema, NextRecommendationSchema)의 정식 인스턴스로 만
 
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import ValidationError
@@ -39,6 +40,7 @@ from app.schemas.feature_template import (
     QuestionSchema,
     RequirementSchema,
 )
+from app.services.feature_template_progress import emit_feature_template_progress
 from app.services.feature_template_instant_skeleton import (
     QUALITY_INSTANT_FULL_GENERATION_MODE,
     QUALITY_INSTANT_GENERATION_MODE,
@@ -61,7 +63,9 @@ from app.services.prompt_builder import (
     select_usable_rag_references,
 )
 
-__all__ = ["FeatureTemplateGenerator"]
+ProgressCallback = Callable[[str, str, int], None]
+
+__all__ = ["FeatureTemplateGenerator", "ProgressCallback"]
 
 
 logger = logging.getLogger(__name__)
@@ -129,12 +133,20 @@ class FeatureTemplateGenerator:
     def __init__(self, llm_service: LLMService | None = None) -> None:
         self._llm_service = llm_service or LLMService()
 
-    def generate(self, request: FeatureTemplateGenerateRequest) -> FeatureTemplateGenerateResult:
+    def generate(
+        self,
+        request: FeatureTemplateGenerateRequest,
+        progress_callback: ProgressCallback | None = None,
+    ) -> FeatureTemplateGenerateResult:
+        emit_feature_template_progress(progress_callback, "analyze")
         request, applied_refs, gen_meta = self._resolve_applied_references(request)
+        for step in ("requirements", "flow", "apiSpec"):
+            emit_feature_template_progress(progress_callback, step)
         return self._generate_llm_full_first(
             request,
             applied_refs=applied_refs,
             gen_meta=gen_meta,
+            progress_callback=progress_callback,
         )
 
     def _generate_llm_full_first(
@@ -143,7 +155,10 @@ class FeatureTemplateGenerator:
         *,
         applied_refs: list[dict[str, Any]],
         gen_meta: dict[str, Any],
+        progress_callback: ProgressCallback | None = None,
     ) -> FeatureTemplateGenerateResult:
+        for step in ("codeFiles", "questionsMissions", "interviewNext"):
+            emit_feature_template_progress(progress_callback, step)
         t0 = time.perf_counter()
         try:
             prompt, prompt_applied, _ = build_feature_template_prompt_with_applied_rags(request)
@@ -154,6 +169,7 @@ class FeatureTemplateGenerator:
                 timeout_seconds=settings.FEATURE_TEMPLATE_LLM_TIMEOUT_SECONDS,
                 max_tokens=gen_meta.get("skeletonMaxTokens"),
             )
+            emit_feature_template_progress(progress_callback, "finalize")
             normalized_dict = FeatureTemplateNormalizer.normalize(llm_result, request)
             template = FeatureTemplateData(**normalized_dict)
             enhancement_ms = max(0, int((time.perf_counter() - t0) * 1000))
@@ -173,12 +189,14 @@ class FeatureTemplateGenerator:
                     applied_refs=applied_refs,
                     gen_meta=gen_meta,
                     initial_llm_enhancement_ms=enhancement_ms,
+                    progress_callback=progress_callback,
                 )
             return self._generate_mock_fallback(
                 request,
                 applied_refs=applied_refs,
                 gen_meta=gen_meta,
                 initial_llm_enhancement_ms=enhancement_ms,
+                progress_callback=progress_callback,
             )
 
         logger.info(
@@ -207,9 +225,11 @@ class FeatureTemplateGenerator:
         applied_refs: list[dict[str, Any]],
         gen_meta: dict[str, Any],
         initial_llm_enhancement_ms: int | None,
+        progress_callback: ProgressCallback | None = None,
     ) -> FeatureTemplateGenerateResult:
         try:
             normalized_dict = build_quality_instant_skeleton_dict(request)
+            emit_feature_template_progress(progress_callback, "finalize")
             template = FeatureTemplateData(**normalized_dict)
             generation_mode = resolve_instant_generation_mode(request)
             instant_full = instant_full_baseline_applied(request)
@@ -225,6 +245,7 @@ class FeatureTemplateGenerator:
                 applied_refs=applied_refs,
                 gen_meta=gen_meta,
                 initial_llm_enhancement_ms=initial_llm_enhancement_ms,
+                progress_callback=progress_callback,
             )
 
         logger.info(
@@ -255,8 +276,10 @@ class FeatureTemplateGenerator:
         applied_refs: list[dict[str, Any]],
         gen_meta: dict[str, Any],
         initial_llm_enhancement_ms: int | None,
+        progress_callback: ProgressCallback | None = None,
     ) -> FeatureTemplateGenerateResult:
         mock = self._generate_mock_template(request)
+        emit_feature_template_progress(progress_callback, "finalize")
         normalized = FeatureTemplateNormalizer.normalize(mock.model_dump(), request)
         deferred_sections = compute_deferred_sections(request, normalized)
         return self._build_generate_result(
