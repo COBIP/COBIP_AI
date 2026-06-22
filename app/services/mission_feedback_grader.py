@@ -122,14 +122,16 @@ class MissionFeedbackGrader:
         merged_lower = merged_code.lower()
         bucket = detect_feature_template_bucket(request.featureName)
 
-        satisfied, missing_reqs, req_score = self._grade_requirements(request, merged_lower, bucket)
+        satisfied, missing_reqs, req_score = self._grade_requirements(
+            request, merged_lower, bucket
+        )
         evidence_score, evidence_hits = self._grade_evidence(
             merged_code, merged_lower, bucket
         )
         api_issues, api_score = self._grade_api_specs(request, merged_code, merged_lower)
         code_issues = self._detect_code_issues(request.submittedCode, merged_lower)
         missing_requirements = [
-            self._format_missing_requirement(req) for req in missing_reqs
+            self._format_missing_requirement(req, bucket) for req in missing_reqs
         ]
 
         score = min(100, int(round(req_score * 0.35 + evidence_score * 0.45 + api_score * 0.20)))
@@ -192,15 +194,17 @@ class MissionFeedbackGrader:
     def _empty_submission_response(
         self, request: MissionFeedbackRequest
     ) -> MissionFeedbackResponse:
+        bucket = detect_feature_template_bucket(request.featureName)
         missing_requirements = [
-            self._format_missing_requirement(req) for req in request.requirements
+            self._format_missing_requirement(req, bucket) for req in request.requirements
         ]
         return MissionFeedbackResponse(
             passed=False,
             score=0,
             summary=(
                 "제출된 코드가 없어 미션을 평가할 수 없습니다. "
-                "Controller·Service·Repository 흐름이 포함된 파일을 먼저 작성해야 합니다."
+                "지금은 채점할 근거 자체가 없는 상태이며, "
+                "먼저 Controller·Service·Repository 흐름을 갖춘 최소 코드를 작성해야 합니다."
             ),
             satisfiedRequirements=[],
             missingRequirements=missing_requirements,
@@ -249,118 +253,53 @@ class MissionFeedbackGrader:
         return satisfied, missing, ratio * 100
 
     @staticmethod
-    def _format_missing_requirement(req: RequirementSchema) -> str:
-        name = (req.name or "요구사항").strip()
-        related = (req.relatedScreenOrApi or "").strip()
-        description = (req.description or "").strip()
+    def _requirement_reason(name: str) -> str:
+        text = name.lower()
+        rules: tuple[tuple[tuple[str, ...], str], ...] = (
+            (("검증", "validation", "valid"), "요청 값의 형식·필수 여부를 보장해 잘못된 데이터를 차단하기 위해"),
+            (("중복", "duplicate", "exists"), "이미 가입된 값인지 확인해 중복 등록을 막기 위해"),
+            (("해시", "hash", "비밀번호", "password", "암호"), "비밀번호를 평문이 아닌 안전한 형태로 저장하기 위해"),
+            (("저장", "save", "등록", "persist"), "입력 데이터를 영속적으로 보관하기 위해"),
+            (("응답", "response", "결과"), "클라이언트에 결과를 일관된 형식으로 돌려주기 위해"),
+            (("조회", "목록", "list", "read", "get"), "저장된 데이터를 사용자에게 제공하기 위해"),
+            (("수정", "update"), "기존 데이터를 변경 요청에 맞게 갱신하기 위해"),
+            (("삭제", "delete"), "더 이상 필요 없는 데이터를 제거하기 위해"),
+            (("로그인", "login"), "사용자 자격 증명을 검증하고 인증 토큰을 발급하기 위해"),
+            (("인증", "token", "jwt", "보호"), "보호된 자원에 대한 접근을 통제하기 위해"),
+        )
+        for keys, reason in rules:
+            if any(k in text for k in keys):
+                return reason
+        return "미션 기능이 정상적으로 동작하기 위해"
 
-        if related.upper().startswith(("POST", "GET", "PUT", "DELETE", "PATCH")):
-            return (
-                f"'{name}' 요구사항이 코드에서 확인되지 않습니다. "
-                f"기능 검증을 위해 {related} 구현이 필요합니다."
-            )
+    @staticmethod
+    def _requirement_location(req: RequirementSchema, bucket: str) -> str:
+        related = (req.relatedScreenOrApi or "").strip()
         if related:
-            return (
-                f"'{name}' 요구사항이 코드에서 확인되지 않습니다. "
-                f"{related} 계층/화면에 관련 로직이 반영되어야 합니다."
-            )
-        if description:
-            short_desc = description[:80] + ("..." if len(description) > 80 else "")
-            return (
-                f"'{name}' 요구사항이 코드에서 확인되지 않습니다. "
-                f"({short_desc})"
-            )
-        return f"'{name}' 요구사항이 제출 코드에서 확인되지 않습니다."
+            return related
+        defaults = {
+            "signup": "SignupController/SignupService",
+            "crud": "PostController/PostService",
+            "jwt_auth": "AuthController/SecurityConfig",
+        }
+        return defaults.get(bucket, "Controller/Service 계층")
+
+    def _format_missing_requirement(self, req: RequirementSchema, bucket: str) -> str:
+        name = (req.name or "요구사항").strip()
+        reason = self._requirement_reason(name)
+        location = self._requirement_location(req, bucket)
+        return (
+            f"'{name}' 요구사항이 코드 근거로 확인되지 않습니다. "
+            f"{reason} 필요하며, {location}에 해당 로직을 구현해야 합니다."
+        )
 
     @staticmethod
     def _format_api_spec_issue(method: str, endpoint: str) -> str:
         return (
             f"{method.upper()} {endpoint} API가 코드에서 확인되지 않습니다. "
-            f"Controller에 해당 method/endpoint 매핑을 추가하세요."
+            f"매핑 누락 시 해당 기능을 호출할 수 없으므로, "
+            f"Controller에 {method.upper()} {endpoint} 매핑을 추가하세요."
         )
-
-    def _build_summary(
-        self,
-        *,
-        passed: bool,
-        score: int,
-        satisfied_count: int,
-        total_requirements: int,
-        evidence_hits: list[str],
-        api_issues: list[str],
-        code_issues: list[CodeIssueSchema],
-        critical_issues: list[str],
-        missing_reqs: list[RequirementSchema],
-        bucket: str,
-    ) -> str:
-        fulfillment = (
-            f"요구사항 {satisfied_count}/{total_requirements} 충족, "
-            f"구현 근거(evidence) {len(evidence_hits)}건 확인"
-        )
-
-        top_problems: list[str] = []
-        if critical_issues:
-            top_problems.extend(critical_issues[:2])
-        elif api_issues:
-            top_problems.append(api_issues[0])
-        elif missing_reqs:
-            top_problems.append(self._format_missing_requirement(missing_reqs[0]))
-        elif code_issues:
-            top_problems.append(code_issues[0].message)
-
-        if passed:
-            next_hint = "다음 미션으로 넘어가도 됩니다."
-            if bucket == "signup" and "password_hash" not in evidence_hits:
-                next_hint = "비밀번호 해시 저장 여부를 한 번 더 점검한 뒤 다음 미션으로 진행하세요."
-            return (
-                f"{fulfillment}. score={score}. "
-                f"핵심 Controller·API·Service 구조가 확인됩니다. {next_hint}"
-            )
-
-        problem_text = " / ".join(top_problems[:2]) if top_problems else "핵심 구현 요소가 부족합니다."
-        first_fix = self._primary_fix_hint(
-            missing_reqs=missing_reqs,
-            api_issues=api_issues,
-            code_issues=code_issues,
-            critical_issues=critical_issues,
-            bucket=bucket,
-        )
-        return (
-            f"{fulfillment}, apiSpec 이슈 {len(api_issues)}건, "
-            f"코드 이슈 {len(code_issues)}건. score={score}. "
-            f"가장 큰 문제: {problem_text}. "
-            f"우선 수정: {first_fix}"
-        )
-
-    @staticmethod
-    def _primary_fix_hint(
-        *,
-        missing_reqs: list[RequirementSchema],
-        api_issues: list[str],
-        code_issues: list[CodeIssueSchema],
-        critical_issues: list[str],
-        bucket: str,
-    ) -> str:
-        if any("Controller" in issue for issue in critical_issues):
-            return "Controller 클래스(@RestController)를 추가하고 API endpoint를 매핑하세요."
-        if any("endpoint" in issue.lower() for issue in critical_issues):
-            defaults = {
-                "signup": "POST /api/auth/signup endpoint를 Controller에 추가하세요.",
-                "crud": "GET /api/posts endpoint를 Controller에 추가하세요.",
-                "jwt_auth": "POST /api/auth/login endpoint를 Controller에 추가하세요.",
-            }
-            return defaults.get(bucket, "핵심 API endpoint를 Controller에 매핑하세요.")
-        if api_issues:
-            return api_issues[0]
-        if code_issues:
-            return code_issues[0].suggestion or code_issues[0].message
-        if missing_reqs:
-            req = missing_reqs[0]
-            related = (req.relatedScreenOrApi or "").strip()
-            if related:
-                return f"'{req.name}' 요구사항을 충족하도록 {related} 관련 코드를 추가하세요."
-            return f"'{req.name}' 요구사항을 코드에 반영하세요."
-        return "Controller → Service → Repository 흐름부터 다시 정리하세요."
 
     @staticmethod
     def _requirement_tokens(
@@ -461,9 +400,7 @@ class MissionFeedbackGrader:
             if self._endpoint_in_code(endpoint, method, merged_code, merged_lower):
                 matched += 1
             else:
-                issues.append(
-                    self._format_api_spec_issue(method, endpoint)
-                )
+                issues.append(self._format_api_spec_issue(method, endpoint))
 
         total = len(request.apiSpecs)
         score = (matched / total) * 100 if total else 80.0
@@ -546,19 +483,66 @@ class MissionFeedbackGrader:
                     line=None,
                     severity="warning",
                     message=(
-                        "비밀번호 처리 코드에 해시/암호화 키워드가 없습니다. "
-                        "평문 저장·로그 노출 위험이 있습니다."
+                        "원인: 비밀번호를 다루는 코드에 해시/암호화 처리가 없습니다. "
+                        "영향: 비밀번호가 평문으로 저장·노출되어 유출 시 그대로 악용될 수 있습니다."
                     ),
                     suggestion=(
-                        "PasswordEncoder(BCrypt 등)로 encode() 후 저장하고, "
-                        "응답·로그에 비밀번호를 노출하지 마세요."
+                        "수정: PasswordEncoder(BCrypt)를 주입해 encode()로 해시한 값을 저장하고, "
+                        "응답·로그에는 비밀번호를 포함하지 마세요."
                     ),
                 )
             )
         return issues
 
-    @staticmethod
+    # 요구사항 이름 키워드 → 바로 따라 할 수 있는 액션 문장.
+    _ACTION_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+        (
+            ("검증", "validation", "valid"),
+            "요청 DTO에 @Email, @NotBlank, @Size 같은 Bean Validation을 추가하고 "
+            "Controller 파라미터에 @Valid를 붙여 검증하세요.",
+        ),
+        (
+            ("중복", "duplicate", "exists"),
+            "Service에서 repository.existsByEmail(...)로 중복을 확인하고 "
+            "중복이면 409로 응답하도록 처리하세요.",
+        ),
+        (
+            ("해시", "hash", "비밀번호", "password", "암호"),
+            "Service에서 PasswordEncoder.encode(password)로 해시한 값을 저장하세요.",
+        ),
+        (
+            ("저장", "save", "등록", "persist"),
+            "Service에서 엔티티를 만들어 repository.save(entity)로 저장하세요.",
+        ),
+        (
+            ("조회", "목록", "list", "read"),
+            "Repository 조회 메서드를 호출하고 결과를 응답 DTO로 변환해 반환하세요.",
+        ),
+        (
+            ("로그인", "login"),
+            "AuthController에 POST /api/auth/login을 추가하고 인증 성공 시 "
+            "JwtTokenProvider로 토큰을 발급하세요.",
+        ),
+        (
+            ("인증", "token", "jwt", "보호"),
+            "JwtAuthenticationFilter에서 Bearer 토큰을 검증하고 SecurityConfig에서 "
+            "보호 경로를 설정하세요.",
+        ),
+    )
+
+    @classmethod
+    def _action_for_requirement(cls, name: str, location: str) -> str:
+        text = name.lower()
+        for keys, action in cls._ACTION_HINTS:
+            if any(k in text for k in keys):
+                return action
+        return (
+            f"'{name}' 요구사항을 {location}에 구현하세요. "
+            f"Controller는 요청 수신, Service는 비즈니스 로직, Repository는 DB 접근을 담당합니다."
+        )
+
     def _build_suggestions(
+        self,
         missing_reqs: list[RequirementSchema],
         api_issues: list[str],
         code_issues: list[CodeIssueSchema],
@@ -567,35 +551,21 @@ class MissionFeedbackGrader:
         request: MissionFeedbackRequest,
     ) -> list[str]:
         suggestions: list[str] = []
-        if missing_reqs:
-            first = missing_reqs[0]
-            related = (first.relatedScreenOrApi or "").strip()
-            if related.upper().startswith(("POST", "GET", "PUT", "DELETE", "PATCH")):
-                suggestions.append(
-                    f"'{first.name}' 요구사항을 충족하도록 {related} endpoint와 "
-                    f"연결된 Service 로직을 추가하세요."
-                )
-            else:
-                suggestions.append(
-                    f"'{first.name}' 요구사항을 코드에 반영하세요. "
-                    f"관련 위치: {related or 'Controller/Service'}"
-                )
-            if len(missing_reqs) > 1:
-                others = ", ".join(req.name for req in missing_reqs[1:4])
-                suggestions.append(f"이어서 다음 요구사항도 확인하세요: {others}")
+        for req in missing_reqs[:3]:
+            location = self._requirement_location(req, bucket)
+            suggestions.append(self._action_for_requirement(req.name or "", location))
         if api_issues:
             suggestions.append(
-                "Controller의 @PostMapping/@GetMapping 등 HTTP method 매핑이 "
-                "apiSpec endpoint와 일치하는지 대조하세요."
+                "Controller의 @PostMapping/@GetMapping/@PutMapping/@DeleteMapping 경로가 "
+                "apiSpec의 method·endpoint와 정확히 일치하는지 대조해 맞추세요."
             )
-        if code_issues:
-            for issue in code_issues[:2]:
-                suggestions.append(issue.suggestion or issue.message)
+        for issue in code_issues[:2]:
+            suggestions.append(issue.suggestion or issue.message)
         if not suggestions:
             mission_title = (request.mission.title or "현재 미션").strip()
             suggestions.append(
                 f"'{mission_title}' 핵심 요구사항을 충족했습니다. "
-                f"다음 미션에서 예외 처리·검증 강화를 연습해 보세요."
+                f"이제 입력값 검증과 예외 응답(400/404/409)을 보강해 완성도를 높여 보세요."
             )
         if bucket == "signup" and "password_hash" not in evidence_hits:
             suggestions.append(
@@ -603,8 +573,101 @@ class MissionFeedbackGrader:
             )
         return suggestions
 
+    def _build_summary(
+        self,
+        *,
+        passed: bool,
+        score: int,
+        satisfied_count: int,
+        total_requirements: int,
+        evidence_hits: list[str],
+        api_issues: list[str],
+        code_issues: list[CodeIssueSchema],
+        critical_issues: list[str],
+        missing_reqs: list[RequirementSchema],
+        bucket: str,
+    ) -> str:
+        fulfillment = (
+            f"요구사항 {satisfied_count}/{total_requirements}개를 충족했고 "
+            f"구현 근거(evidence) {len(evidence_hits)}건이 확인됩니다(score={score})."
+        )
+
+        if passed:
+            second = "핵심 Controller·API·Service 구조가 모두 확인되어 미션을 통과했습니다."
+            if bucket == "signup" and "password_hash" not in evidence_hits:
+                third = "다만 비밀번호 해시 저장 여부만 한 번 더 점검하면 좋습니다."
+            else:
+                third = "이제 예외 처리·검증을 보강하면 완성도를 더 높일 수 있습니다."
+            return f"{fulfillment} {second} {third}"
+
+        biggest = self._biggest_problem(
+            critical_issues=critical_issues,
+            api_issues=api_issues,
+            missing_reqs=missing_reqs,
+            code_issues=code_issues,
+            bucket=bucket,
+        )
+        direction = self._primary_fix_hint(
+            missing_reqs=missing_reqs,
+            api_issues=api_issues,
+            code_issues=code_issues,
+            critical_issues=critical_issues,
+            bucket=bucket,
+        )
+        return (
+            f"{fulfillment} 가장 큰 문제는 {biggest} "
+            f"다음 수정 방향: {direction}"
+        )
+
+    def _biggest_problem(
+        self,
+        *,
+        critical_issues: list[str],
+        api_issues: list[str],
+        missing_reqs: list[RequirementSchema],
+        code_issues: list[CodeIssueSchema],
+        bucket: str,
+    ) -> str:
+        if critical_issues:
+            return critical_issues[0]
+        if api_issues:
+            return api_issues[0]
+        if missing_reqs:
+            return self._format_missing_requirement(missing_reqs[0], bucket)
+        if code_issues:
+            return code_issues[0].message
+        return "핵심 구현 근거가 부족하다는 점입니다."
+
     @staticmethod
+    def _primary_fix_hint(
+        *,
+        missing_reqs: list[RequirementSchema],
+        api_issues: list[str],
+        code_issues: list[CodeIssueSchema],
+        critical_issues: list[str],
+        bucket: str,
+    ) -> str:
+        if any("Controller" in issue for issue in critical_issues):
+            return "@RestController 클래스를 만들고 API endpoint를 매핑하는 것부터 시작하세요."
+        if any("endpoint" in issue.lower() for issue in critical_issues):
+            defaults = {
+                "signup": "POST /api/auth/signup endpoint를 Controller에 추가하세요.",
+                "crud": "GET /api/posts endpoint를 Controller에 추가하세요.",
+                "jwt_auth": "POST /api/auth/login endpoint를 Controller에 추가하세요.",
+            }
+            return defaults.get(bucket, "핵심 API endpoint를 Controller에 매핑하세요.")
+        if api_issues:
+            return api_issues[0]
+        if code_issues:
+            return code_issues[0].suggestion or code_issues[0].message
+        if missing_reqs:
+            req = missing_reqs[0]
+            related = (req.relatedScreenOrApi or "").strip() or "Controller/Service"
+            return f"'{req.name}' 요구사항을 {related}에 구현하세요."
+        return "Controller → Service → Repository 흐름부터 다시 정리하세요."
+
     def _build_next_action(
+        self,
         *,
         passed: bool,
         missing_reqs: list[RequirementSchema],
@@ -615,31 +678,21 @@ class MissionFeedbackGrader:
         mission_title: str,
     ) -> str:
         if passed:
-            if bucket == "jwt_auth":
-                return "토큰 만료·리프레시 정책을 추가해 JWT 인증 흐름을 심화 학습하세요."
-            if bucket == "crud":
-                return "404/400 예외 응답을 추가해 CRUD API 완성도를 높여 보세요."
-            if bucket == "signup":
-                return "입력값 검증(@Valid)과 중복 이메일(409) 처리를 점검한 뒤 다음 미션으로 진행하세요."
-            return f"'{mission_title or '현재 미션'}'을 충족했습니다. 다음 미션으로 진행하세요."
-
-        if any("Controller" in issue for issue in critical_issues):
-            return "가장 먼저 @RestController 클래스를 만들고 API endpoint를 매핑하세요."
-        if any("endpoint" in issue.lower() for issue in critical_issues):
             defaults = {
-                "signup": "가장 먼저 POST /api/auth/signup endpoint를 Controller에 추가하세요.",
-                "crud": "가장 먼저 GET /api/posts endpoint를 Controller에 추가하세요.",
-                "jwt_auth": "가장 먼저 POST /api/auth/login endpoint를 Controller에 추가하세요.",
+                "signup": "입력값 검증(@Valid)과 중복 이메일(409) 처리를 점검한 뒤 다음 미션으로 진행하세요.",
+                "crud": "404/400 예외 응답을 추가해 CRUD API 완성도를 높여 보세요.",
+                "jwt_auth": "토큰 만료·리프레시 정책을 추가해 JWT 인증 흐름을 심화 학습하세요.",
             }
-            return defaults.get(bucket, "가장 먼저 핵심 API endpoint를 Controller에 매핑하세요.")
-        if api_issues:
-            return f"가장 먼저 {api_issues[0].split(' API')[0]} 구현부터 맞추세요."
-        if code_issues:
-            return f"가장 먼저 {code_issues[0].suggestion or code_issues[0].message}"
-        if missing_reqs:
-            req = missing_reqs[0]
-            related = (req.relatedScreenOrApi or "").strip()
-            if related:
-                return f"가장 먼저 '{req.name}' 요구사항을 충족하도록 {related} 관련 코드를 추가하세요."
-            return f"가장 먼저 '{req.name}' 요구사항을 코드에 반영하세요."
-        return "Controller → Service → Repository 순서로 최소 동작 흐름을 완성한 뒤 재제출하세요."
+            return defaults.get(
+                bucket,
+                f"'{mission_title or '현재 미션'}'을 충족했습니다. 다음 미션으로 진행하세요.",
+            )
+
+        fix = self._primary_fix_hint(
+            missing_reqs=missing_reqs,
+            api_issues=api_issues,
+            code_issues=code_issues,
+            critical_issues=critical_issues,
+            bucket=bucket,
+        )
+        return f"가장 먼저 {fix}"
