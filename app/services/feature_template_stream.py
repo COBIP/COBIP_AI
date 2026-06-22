@@ -41,7 +41,6 @@ async def stream_feature_template_generation(
                 request,
                 progress_callback,
             )
-            complete_label, _ = FEATURE_TEMPLATE_PROGRESS_STEPS["finalize"]
             await queue.put(
                 format_sse(
                     "complete",
